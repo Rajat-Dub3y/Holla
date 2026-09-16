@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+@import '@fontsource/playfair-display/400.css';
+@import '@fontsource/playfair-display/700.css';
+@import '@fontsource/dm-mono/400.css';
+
+:root {
+  --font-inter: 'Inter', system-ui, sans-serif;
+  --font-playfair: 'Playfair Display', Georgia, serif;
+  --font-dmmono: 'DM Mono', monospace;
+
+  --background: 40 33% 96%;
+  --foreground: 0 0% 10%;
+  --card: 40 33% 98%;
+  --card-foreground: 0 0% 10%;
+  --popover: 40 33% 98%;
+  --popover-foreground: 0 0% 10%;
+  --primary: 15 76% 57%;
+  --primary-foreground: 40 33% 98%;
+  --secondary: 38 30% 88%;
+  --secondary-foreground: 0 0% 10%;
+  --muted: 38 30% 90%;
+  --muted-foreground: 33 12% 43%;
+  --accent: 140 26% 33%;
+  --accent-foreground: 40 33% 98%;
+  --destructive: 0 72% 45%;
+  --destructive-foreground: 40 33% 98%;
+  --border: 38 22% 80%;
+  --input: 38 22% 80%;
+  --ring: 15 76% 57%;
+  --chart-1: 15 76% 57%;
+  --chart-2: 140 26% 33%;
+  --chart-3: 38 30% 55%;
+  --chart-4: 33 60% 65%;
+  --chart-5: 27 50% 47%;
+  --radius: 0.625rem;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-inter);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-playfair);
+  }
+}
+
+@layer utilities {
+  .font-serif {
+    font-family: var(--font-playfair);
+  }
+  .font-mono {
+    font-family: var(--font-dmmono);
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .blur-cap {
+    filter: blur(6px);
+    user-select: none;
+    pointer-events: none;
+  }
+}
