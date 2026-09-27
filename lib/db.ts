@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/neon-http";
 import { neon } from "@neondatabase/serverless";
-import * as schema from "@/schema"; // adjust path to match where schema.ts actually lives
+import * as schema from "@/lib/Schema"; // adjust path to match where schema.ts actually lives
 
 const sql = neon(process.env.DATABASE_URL!);
 

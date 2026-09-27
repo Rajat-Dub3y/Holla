@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyFirebaseIdToken } from "@/lib/firebase-admin";
 import { db } from "@/lib/db";
-import { users, creditBalances, streaks } from "@/schema";
+import { users, creditBalances, streaks } from "@/lib/Schema";
 import { eq } from "drizzle-orm";
 
 // Free-tier defaults — matches the schema's column defaults, kept explicit
