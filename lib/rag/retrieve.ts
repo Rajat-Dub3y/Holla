@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { ragChunks } from "@/lib/schema";
+import { ragChunks } from "@/lib/Schema";
 import { sql } from "drizzle-orm";
 import { embedText } from "@/lib/rag/embeddings";
 
