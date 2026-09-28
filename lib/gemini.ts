@@ -239,3 +239,98 @@ export async function generateEncouragementNote(params: {
   const parsed = JSON.parse(response.text ?? "{}");
   return parsed as { encouragement: string };
 }
+
+/**
+ * Persona practice chat — Gemini plays a simulated match with a described
+ * personality, giving the user a low-stakes conversation to practice on.
+ * Returns her simulated reply plus the same style of coach feedback as the
+ * real Chat loop, so practice transfers directly to the real thing.
+ */
+export async function practiceChatTurn(params: {
+  personaDescription: string;
+  conversationSoFar: ThreadMessageForPrompt[];
+  hisNewMessage: string;
+}): Promise<{ herReply: string; coachFeedback: string }> {
+  const { personaDescription, conversationSoFar, hisNewMessage } = params;
+
+  const historyText = conversationSoFar
+    .map((m) => `${m.sender === "user" ? "Him" : "Her"}: ${m.content}`)
+    .join("\n");
+
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text: `You are simulating a dating match with this personality: ${personaDescription}\n\nConversation so far:\n${historyText}\n\nHe just said: "${hisNewMessage}"\n\nRespond in character as her (natural, realistic texting style — not overly enthusiastic or robotic), then separately give one short line of coach feedback on how he did.`,
+          },
+        ],
+      },
+    ],
+    config: {
+      systemInstruction: SYSTEM_PROMPT,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          herReply: { type: Type.STRING, description: "Her simulated in-character reply." },
+          coachFeedback: { type: Type.STRING, description: "One short coaching line on his message." },
+        },
+        required: ["herReply", "coachFeedback"],
+      },
+    },
+  });
+
+  const parsed = JSON.parse(response.text ?? "{}");
+  return parsed as { herReply: string; coachFeedback: string };
+}
+
+/**
+ * General coaching Q&A — scoped specifically to dating/self-presentation
+ * topics, not a general-purpose assistant. Still grounded with RAG context
+ * where relevant, same as the main analysis loop.
+ */
+export async function askCoachQuestion(params: {
+  question: string;
+  persona?: PersonaContext;
+}): Promise<{ answer: string }> {
+  const { question, persona } = params;
+
+  let ragContext = "";
+  try {
+    const chunks = await retrieveRelevantChunks(question);
+    ragContext = formatChunksForPrompt(chunks);
+  } catch (err) {
+    console.error("RAG retrieval failed for Q&A, proceeding without it:", err);
+  }
+
+  const personaLine = persona
+    ? `User's communication style: ${persona.communicationStyle ?? "unspecified"}.`
+    : "";
+
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: `${personaLine}\n\nQuestion: ${question}` }],
+      },
+    ],
+    config: {
+      systemInstruction: `${buildSystemPromptWithRagContext(ragContext)}\n\nThis is general coaching Q&A, not analysis of a specific conversation — answer directly and practically. Stay scoped to dating, conversation skills, and self-presentation topics; if asked something unrelated, redirect briefly back to what you actually help with.`,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          answer: { type: Type.STRING, description: "A direct, practical answer." },
+        },
+        required: ["answer"],
+      },
+    },
+  });
+
+  const parsed = JSON.parse(response.text ?? "{}");
+  return parsed as { answer: string };
+}

@@ -2,12 +2,17 @@ import { GoogleGenAI } from "@google/genai";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY });
 
-const EMBEDDING_MODEL = "text-embedding-004"; // outputs 768-dim vectors — must match schema.ts's ragChunks.embedding column
+// gemini-embedding-001 defaults to 3072 dims, but supports truncation to 768
+// via outputDimensionality. We request 768 so it matches the vector(768)
+// column already in schema.ts — no migration needed.
+const EMBEDDING_MODEL = "gemini-embedding-001";
+const EMBEDDING_DIMENSIONS = 768;
 
 export async function embedText(text: string): Promise<number[]> {
   const response = await ai.models.embedContent({
     model: EMBEDDING_MODEL,
     contents: text,
+    config: { outputDimensionality: EMBEDDING_DIMENSIONS },
   });
 
   const values = response.embeddings?.[0]?.values;
