@@ -1,31 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUserId } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { threads, messages } from "@/lib/Schema";
-import { eq, and, asc } from "drizzle-orm";
+import { users } from "@/lib/Schema";
+import { eq } from "drizzle-orm";
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: { threadId: string } },
-) {
+export async function GET(req: NextRequest) {
   const userId = await getAuthenticatedUserId(req);
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { threadId } = params;
-
-  const thread = await db.query.threads.findFirst({
-    where: and(eq(threads.id, threadId), eq(threads.userId, userId)),
+  const result = await db.query.users.findFirst({
+    where: eq(users.id, userId),
+    with: { persona: true, creditBalance: true },
   });
-  if (!thread) {
-    return NextResponse.json({ error: "Thread not found" }, { status: 404 });
+  if (!result) {
+    return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
-  const threadMessages = await db.query.messages.findMany({
-    where: eq(messages.threadId, threadId),
-    orderBy: asc(messages.createdAt),
-  });
-
-  return NextResponse.json({ thread, messages: threadMessages });
+  const { persona, creditBalance, ...user } = result;
+  return NextResponse.json({ user, persona, creditBalance });
 }

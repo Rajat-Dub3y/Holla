@@ -5,10 +5,12 @@ import { ArrowRight, MessageCircle, BookOpen, Lightbulb } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { CreditPill } from '@/components/credit-pill';
 import { BRAND, PERSONAS } from '@/lib/brand';
-import { mockUser, mockLearningScenarios } from '@/lib/mock-data';
+import { mockLearningScenarios } from '@/lib/mock-data';
+import { useMe } from '@/lib/use-me';
 
 export default function CoachPage() {
-  const persona = PERSONAS[mockUser.persona];
+  const { profile } = useMe();
+  const persona = PERSONAS[profile?.persona ?? 'entrepreneur'];
   const practiceScenarios = mockLearningScenarios.filter((s) => s.type === 'practice');
   const quizScenarios = mockLearningScenarios.filter((s) => s.type === 'quiz');
 
@@ -18,7 +20,7 @@ export default function CoachPage() {
         {/* Mobile top bar */}
         <div className="mb-6 flex items-center justify-between md:hidden">
           <span className="font-serif text-xl font-bold text-charcoal">{BRAND.name}</span>
-          <CreditPill credits={mockUser.credits} />
+          <CreditPill credits={profile?.credits ?? 0} />
         </div>
 
         <div className="mb-8">

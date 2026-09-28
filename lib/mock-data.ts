@@ -8,7 +8,7 @@ export const mockUser: UserProfile = {
   communicationStyle: 'Thoughtful but tends to overthink',
   currentFocus: 'Getting past the first few messages',
   routingChoice: 'match',
-  credits: 1180,
+  credits: 0,
   tier: 'free',
 };
 
@@ -129,15 +129,6 @@ export const mockConversations: Conversation[] = [
   },
 ];
 
-export const mockSystemMessages: ChatMessage[] = [
-  {
-    id: 'sys-1',
-    role: 'system',
-    text: 'Credits reset in 4h 12m · 3 insights used today',
-    timestamp: '',
-  },
-];
-
 export const mockLearningScenarios: LearningScenario[] = [
   {
     id: 'scen-1',
@@ -146,6 +137,8 @@ export const mockLearningScenarios: LearningScenario[] = [
     description: 'She said "nice" — practice 3 ways to keep it going without forcing it.',
     persona: 'intellectual',
     difficulty: 'easy',
+    openingMessage: 'nice',
+    personaDescription: 'She texts briefly at first but opens up when the conversation gets specific. She likes dry humor and thoughtful questions.',
   },
   {
     id: 'scen-2',
@@ -154,6 +147,8 @@ export const mockLearningScenarios: LearningScenario[] = [
     description: 'Practice the follow-up that respects her space but keeps the door open.',
     persona: 'introvert',
     difficulty: 'medium',
+    openingMessage: 'haha yeah, this week has been a lot',
+    personaDescription: 'She is warm but replies slowly and does not enjoy pressure. She responds best to calm, low-key conversation.',
   },
   {
     id: 'scen-3',
@@ -170,6 +165,18 @@ export const mockLearningScenarios: LearningScenario[] = [
     description: 'Practice the transition with a match who\'s been warm but hasn\'t said yes yet.',
     persona: 'entrepreneur',
     difficulty: 'hard',
+    openingMessage: 'That sounds fun, I have been meaning to try it',
+    personaDescription: 'She is engaged and playful, but wants the plan to feel relaxed rather than over-engineered. She appreciates confidence without pressure.',
+  },
+  {
+    id: 'scen-6',
+    title: 'Find a natural thread after a strong opener',
+    type: 'practice',
+    description: 'Build on a shared interest without turning the chat into an interview.',
+    persona: 'social',
+    difficulty: 'medium',
+    openingMessage: 'I had the best weekend upstate',
+    personaDescription: 'She is expressive and enjoys telling stories, especially about travel and food. She likes playful curiosity and gives more when asked one focused question.',
   },
   {
     id: 'scen-5',

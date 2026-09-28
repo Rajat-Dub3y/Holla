@@ -135,3 +135,14 @@ export async function getCreditBalance(userId: string) {
   await resetIfNeeded(userId);
   return db.query.creditBalances.findFirst({ where: eq(creditBalances.userId, userId) });
 }
+
+export async function refundAnalyzeCredit(userId: string) {
+  if (await isUnlimitedTier(userId)) return;
+  await db
+    .update(creditBalances)
+    .set({
+      analyzeCreditsRemaining: sql`${creditBalances.analyzeCreditsRemaining} + 1`,
+      updatedAt: new Date(),
+    })
+    .where(eq(creditBalances.userId, userId));
+}

@@ -32,8 +32,8 @@ export async function POST(req: NextRequest) {
     customer: stripeCustomerId,
     mode: "subscription",
     line_items: [{ price: process.env.STRIPE_PREMIUM_PRICE_ID!, quantity: 1 }],
-    success_url: `${process.env.NEXT_PUBLIC_APP_URL}/paywall/success?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/paywall`,
+    success_url: `${process.env.NEXT_PUBLIC_APP_URL}/home?upgraded=1`,
+    cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/pricing`,
     metadata: { userId: user.id },
     // The subscription object itself needs its own copy of this metadata —
     // it does NOT inherit the checkout session's metadata automatically, and

@@ -1,8 +1,9 @@
 import { db } from "@/lib/db";
 import { learningSessions, creditBalances } from "@/lib/Schema";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 
 const LEARNING_COMPLETION_BONUS = 1; // small, per the MVP spec — a "welcome back" gesture, not a cap workaround
+const MAX_DAILY_LEARNING_BONUS = 3;
 
 export type QuizScenario = {
   id: string;
@@ -51,18 +52,32 @@ export async function recordLearningSessionAndAwardBonus(params: {
 }) {
   const { userId, type, content } = params;
 
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+
+  const [{ earnedToday }] = await db
+    .select({ earnedToday: sql<string>`coalesce(sum(${learningSessions.creditsEarned}), 0)` })
+    .from(learningSessions)
+    .where(and(eq(learningSessions.userId, userId), gte(learningSessions.createdAt, startOfToday)));
+  const awardable = Math.max(
+    0,
+    Math.min(LEARNING_COMPLETION_BONUS, MAX_DAILY_LEARNING_BONUS - Number(earnedToday)),
+  );
+
   await db.insert(learningSessions).values({
     userId,
     type,
     content,
-    creditsEarned: LEARNING_COMPLETION_BONUS,
+    creditsEarned: awardable,
   });
 
-  await db
-    .update(creditBalances)
-    .set({
-      analyzeCreditsRemaining: sql`${creditBalances.analyzeCreditsRemaining} + ${LEARNING_COMPLETION_BONUS}`,
-      updatedAt: new Date(),
-    })
-    .where(eq(creditBalances.userId, userId));
+  if (awardable > 0) {
+    await db
+      .update(creditBalances)
+      .set({
+        analyzeCreditsRemaining: sql`${creditBalances.analyzeCreditsRemaining} + ${awardable}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(creditBalances.userId, userId));
+  }
 }

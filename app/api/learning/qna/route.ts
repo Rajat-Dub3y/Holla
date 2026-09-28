@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUserId } from "@/lib/auth";
-import { consumeLearningCredit } from "@/lib/credits";
+import { consumeLearningCredit, getCreditBalance } from "@/lib/credits";
 import { askCoachQuestion } from "@/lib/gemini";
 import { recordLearningSessionAndAwardBonus } from "@/lib/learning";
 import { db } from "@/lib/db";
@@ -15,8 +15,9 @@ export async function POST(req: NextRequest) {
 
   const creditCheck = await consumeLearningCredit(userId);
   if (!creditCheck.allowed) {
+    const balance = await getCreditBalance(userId);
     return NextResponse.json(
-      { error: "no_credits", message: "Out of coaching Q&A for today." },
+      { error: "no_credits", message: "Out of coaching Q&A for today.", dailyResetAt: balance?.dailyResetAt },
       { status: 402 },
     );
   }

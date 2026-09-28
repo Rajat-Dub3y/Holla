@@ -10,6 +10,7 @@ export interface UserProfile {
   routingChoice: 'match' | 'practice';
   credits: number;
   tier: 'free' | 'premium' | 'elite';
+  dailyResetAt?: string | null;
 }
 
 export type MessageRole = 'her' | 'him' | 'coach' | 'system';
@@ -21,7 +22,7 @@ export interface ChatMessage {
   timestamp: string;
   annotation?: {
     type: 'insight' | 'signal' | 'suggestion';
-    text: string;
+    text?: string;
   };
 }
 
@@ -33,6 +34,7 @@ export interface Conversation {
   lastActivity: string;
   preview: string;
   messages: ChatMessage[];
+  status?: 'active' | 'archived' | 'gone_cold';
 }
 
 export interface LearningScenario {
@@ -42,6 +44,8 @@ export interface LearningScenario {
   description: string;
   persona: PersonaId;
   difficulty: 'easy' | 'medium' | 'hard';
+  openingMessage?: string;
+  personaDescription?: string;
 }
 
 export interface ProfileInsight {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUserId } from "@/lib/auth";
-import { consumeAnalyzeCredit, getCreditBalance } from "@/lib/credits";
+import { consumeAnalyzeCredit, getCreditBalance, refundAnalyzeCredit } from "@/lib/credits";
 import { analyzeIncomingMessage, type ThreadMessageForPrompt } from "@/lib/gemini";
 import { db } from "@/lib/db";
 import { threads, messages, userPersonas } from "@/lib/Schema";
@@ -91,6 +91,7 @@ export async function POST(
     });
   } catch (err) {
     console.error("Gemini analysis failed:", err);
+    await refundAnalyzeCredit(userId);
     // Her message is already saved — return it without an annotation rather
     // than a hard failure, so the thread isn't left in a broken state.
     return NextResponse.json({ herMessage, coachAnnotation: null, error: "analysis_failed" });

@@ -1,11 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, ArrowLeft, Apple, Check } from 'lucide-react';
 import { BRAND, ALL_VIBE_TAGS, COACHES } from '@/lib/brand';
 import type { VibeTag } from '@/lib/brand';
 import { cn } from '@/lib/utils';
+import { GoogleAuthProvider, getRedirectResult, signInWithPopup, signInWithRedirect, type User } from 'firebase/auth';
+import { auth } from '@/lib/firebase-client';
+import { apiFetch } from '@/lib/api-client';
+import { toast } from 'sonner';
 
 type Step = 'hook' | 'signin' | 'why' | 'q1' | 'q2' | 'q3' | 'q4' | 'q5' | 'ready';
 
@@ -34,6 +38,73 @@ export default function OnboardingPage() {
   const [commStyle, setCommStyle] = useState<string>('');
   const [focus, setFocus] = useState<string>('');
   const [routing, setRouting] = useState<'match' | 'practice'>('match');
+  const [signingIn, setSigningIn] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  const finishSignIn = async (firebaseUser: User) => {
+    const response = await fetch('/api/auth/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken: await firebaseUser.getIdToken() }),
+    });
+    if (!response.ok) throw new Error('Could not create your account. Please try again.');
+    const session = await response.json() as { isNewUser: boolean };
+    if (!session.isNewUser) {
+      const profile = await apiFetch<{ persona: unknown | null }>('/api/user/me');
+      if (profile.persona) {
+        router.replace('/home');
+        return;
+      }
+    }
+    setStep('why');
+  };
+
+  useEffect(() => {
+    getRedirectResult(auth).then((result) => {
+      if (result) return finishSignIn(result.user);
+    }).catch(() => toast.error('Sign-in did not complete. Please try again.'));
+  }, []);
+
+  const signInWithGoogle = async () => {
+    setSigningIn(true);
+    try {
+      const result = await signInWithPopup(auth, new GoogleAuthProvider());
+      await finishSignIn(result.user);
+    } catch (error) {
+      if ((error as { code?: string }).code === 'auth/popup-blocked') {
+        await signInWithRedirect(auth, new GoogleAuthProvider());
+        return;
+      }
+      toast.error(error instanceof Error ? error.message : 'Could not sign in. Please try again.');
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const submitOnboarding = async () => {
+    setSubmitting(true);
+    try {
+      const appValues = Array.from(new Set(selectedApps.map((app) => {
+        const normalized = app.toLowerCase();
+        return ['tinder', 'hinge', 'bumble'].includes(normalized) ? normalized : 'other';
+      })));
+      await apiFetch('/api/onboarding', {
+        method: 'POST',
+        body: JSON.stringify({
+          apps: appValues,
+          vibes: selectedVibes,
+          commStyle,
+          focus,
+          routing,
+        }),
+      });
+      router.push(routing === 'practice' ? '/learn' : '/chat');
+    } catch {
+      toast.error('Could not save your preferences. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const stepIndex = ALL_STEPS.indexOf(step);
   const questionIndex = QUESTION_STEPS.indexOf(step);
@@ -42,8 +113,6 @@ export default function OnboardingPage() {
     const idx = ALL_STEPS.indexOf(step);
     if (idx < ALL_STEPS.length - 1) {
       setStep(ALL_STEPS[idx + 1]);
-    } else {
-      router.push(routing === 'practice' ? '/learn' : '/chat');
     }
   };
 
@@ -134,14 +203,15 @@ export default function OnboardingPage() {
                 </p>
                 <div className="mt-8 space-y-3">
                   <button
-                    onClick={next}
+                    onClick={() => toast.info('Apple sign-in coming soon')}
                     className="flex w-full items-center justify-center gap-3 rounded-xl bg-charcoal px-4 py-3.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
                   >
                     <Apple className="h-5 w-5" />
                     Continue with Apple
                   </button>
                   <button
-                    onClick={next}
+                    onClick={signInWithGoogle}
+                    disabled={signingIn}
                     className="flex w-full items-center justify-center gap-3 rounded-xl border border-beige-300 bg-white px-4 py-3.5 text-sm font-semibold text-charcoal transition-colors hover:bg-beige-50"
                   >
                     <svg className="h-5 w-5" viewBox="0 0 24 24">
@@ -150,7 +220,7 @@ export default function OnboardingPage() {
                       <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
                       <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
                     </svg>
-                    Continue with Google
+                    {signingIn ? 'Signing in...' : 'Continue with Google'}
                   </button>
                 </div>
                 <p className="mt-6 text-center font-mono text-xs text-mutedtext">
@@ -205,7 +275,8 @@ export default function OnboardingPage() {
               </div>
 
               <button
-                onClick={next}
+                onClick={submitOnboarding}
+                disabled={submitting}
                 className="mt-10 inline-flex items-center gap-2 self-start rounded-lg bg-coral px-6 py-3 text-sm font-semibold text-cream transition-colors hover:bg-coral-dark"
               >
                 Continue
@@ -364,7 +435,7 @@ export default function OnboardingPage() {
                 onClick={next}
                 className="mt-10 inline-flex items-center gap-2 self-start rounded-lg bg-coral px-8 py-3.5 text-sm font-semibold text-cream transition-colors hover:bg-coral-dark"
               >
-                Let&apos;s go
+                {submitting ? 'Saving...' : "Let's go"}
                 <ArrowRight className="h-4 w-4" />
               </button>
             </div>

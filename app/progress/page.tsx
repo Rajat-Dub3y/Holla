@@ -2,15 +2,25 @@
 
 import Link from 'next/link';
 import { Lock, ArrowRight } from 'lucide-react';
+import useSWR from 'swr';
 import { AppShell } from '@/components/app-shell';
 import { CreditPill } from '@/components/credit-pill';
 import { BRAND } from '@/lib/brand';
-import { mockProfileInsights } from '@/lib/mock-data';
 import { LockedOverlay } from '@/components/locked-overlay';
+import { apiFetch } from '@/lib/api-client';
+import { insightToProfileInsight } from '@/lib/adapters';
+import { useMe } from '@/lib/use-me';
+
+interface InsightsResponse {
+  insights: { id: string; category: string | null; title: string; body: string | null; isLocked: boolean }[];
+}
 
 export default function ProgressPage() {
-  const freeInsights = mockProfileInsights.filter((i) => !i.locked);
-  const lockedInsights = mockProfileInsights.filter((i) => i.locked);
+  const { profile } = useMe();
+  const { data, isLoading } = useSWR<InsightsResponse>('/api/profile/insights', apiFetch);
+  const insights = (data?.insights ?? []).map(insightToProfileInsight);
+  const freeInsights = insights.filter((insight) => !insight.locked);
+  const lockedInsights = insights.filter((insight) => insight.locked);
 
   return (
     <AppShell>
@@ -18,7 +28,7 @@ export default function ProgressPage() {
         {/* Mobile top bar */}
         <div className="mb-6 flex items-center justify-between md:hidden">
           <span className="font-serif text-xl font-bold text-charcoal">{BRAND.name}</span>
-          <CreditPill credits={1180} />
+          <CreditPill credits={profile?.credits ?? 0} />
         </div>
 
         <div className="mb-8">
@@ -34,7 +44,7 @@ export default function ProgressPage() {
         </div>
 
         {/* Free insights — always visible */}
-        <div className="space-y-4">
+        {isLoading ? <div className="space-y-4">{[0, 1, 2].map((item) => <div key={item} className="h-32 animate-pulse rounded-2xl bg-beige-100" />)}</div> : !insights.length ? <p className="rounded-xl border border-beige-200 bg-white p-5 text-sm text-mutedtext">Start a conversation and your patterns will show up here.</p> : <div className="space-y-4">
           {freeInsights.map((insight) => (
             <div
               key={insight.id}
@@ -48,7 +58,7 @@ export default function ProgressPage() {
               </p>
             </div>
           ))}
-        </div>
+        </div>}
 
         {/* Locked insights */}
         <div className="mt-8">

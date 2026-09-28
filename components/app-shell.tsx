@@ -1,12 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { useEffect } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import { Home, MessageCircle, GraduationCap, TrendingUp, User } from 'lucide-react';
 import { BRAND } from '@/lib/brand';
 import { CreditPill } from '@/components/credit-pill';
-import { mockUser } from '@/lib/mock-data';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/components/auth-provider';
+import { useMe } from '@/lib/use-me';
 
 const NAV_ITEMS = [
   { href: '/home', label: 'Home', icon: Home },
@@ -18,6 +20,15 @@ const NAV_ITEMS = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const { user, loading } = useAuth();
+  const { profile } = useMe();
+
+  useEffect(() => {
+    if (!loading && !user) router.replace('/onboarding');
+  }, [loading, router, user]);
+
+  if (loading || !user) return null;
 
   return (
     <div className="min-h-screen bg-cream">
@@ -46,7 +57,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               );
             })}
           </nav>
-          <CreditPill credits={mockUser.credits} />
+          <CreditPill credits={profile?.credits ?? 0} />
         </div>
       </header>
 

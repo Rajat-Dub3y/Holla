@@ -69,5 +69,5 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  return NextResponse.json({ personaId, routeTo: routing === "practice" ? "/learning" : "/chat" });
+  return NextResponse.json({ personaId, routeTo: routing === "practice" ? "/learn" : "/chat" });
 }

@@ -17,7 +17,7 @@ export function CreditPill({ credits, className }: CreditPillProps) {
       )}
     >
       <Zap className="h-3 w-3 text-coral" />
-      <span>{credits.toLocaleString()}</span>
+      <span>{Number.isFinite(credits) ? credits.toLocaleString() : '∞'}</span>
     </div>
   );
 }

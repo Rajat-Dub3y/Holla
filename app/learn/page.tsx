@@ -8,94 +8,12 @@ import { BRAND } from '@/lib/brand';
 import { mockLearningScenarios } from '@/lib/mock-data';
 import type { LearningScenario } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { LearnWorkspace } from '@/components/learn-workspace';
 
 type View = 'list' | 'scenario' | 'quiz';
 
 export default function LearnPage() {
-  const [view, setView] = useState<View>('list');
-  const [activeScenario, setActiveScenario] = useState<LearningScenario | null>(null);
-
-  const openScenario = (scenario: LearningScenario) => {
-    setActiveScenario(scenario);
-    setView(scenario.type === 'quiz' ? 'quiz' : 'scenario');
-  };
-
-  return (
-    <AppShell>
-      <div className="mx-auto max-w-4xl px-6 py-6 md:px-8 md:py-10">
-        {/* Mobile top bar */}
-        <div className="mb-6 flex items-center justify-between md:hidden">
-          <span className="font-serif text-xl font-bold text-charcoal">{BRAND.name}</span>
-          <CreditPill credits={1180} />
-        </div>
-
-        {view === 'list' && (
-          <div className="animate-fade-in">
-            <div className="mb-6">
-              <p className="font-mono text-xs uppercase tracking-widest text-coral">
-                Learning
-              </p>
-              <h1 className="mt-1 font-serif text-3xl font-bold text-charcoal md:text-4xl">
-                Get better between conversations
-              </h1>
-              <p className="mt-2 text-sm text-mutedtext">
-                Practice scenarios, quick quizzes, and straight answers — built around your vibe.
-              </p>
-            </div>
-
-            <div className="space-y-3">
-              {mockLearningScenarios.map((scenario) => (
-                <button
-                  key={scenario.id}
-                  onClick={() => openScenario(scenario)}
-                  className="group flex w-full items-center justify-between rounded-xl border border-beige-200 bg-white p-4 text-left transition-all hover:border-beige-300 hover:shadow-sm"
-                >
-                  <div className="flex-1">
-                    <div className="mb-1 flex items-center gap-2">
-                      <span
-                        className={cn(
-                          'rounded-full px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider',
-                          scenario.type === 'practice'
-                            ? 'bg-coral/15 text-coral'
-                            : scenario.type === 'quiz'
-                              ? 'bg-sage/15 text-sage-dark'
-                              : 'bg-beige-200 text-beige-800'
-                        )}
-                      >
-                        {scenario.type === 'practice' ? 'Practice' : scenario.type === 'quiz' ? 'Quiz' : 'Q&A'}
-                      </span>
-                      <span className="font-mono text-[10px] text-mutedtext">
-                        {scenario.difficulty}
-                      </span>
-                    </div>
-                    <h3 className="font-serif text-base font-bold text-charcoal">
-                      {scenario.title}
-                    </h3>
-                    <p className="mt-1 text-xs text-mutedtext">{scenario.description}</p>
-                  </div>
-                  <ArrowRight className="ml-3 h-4 w-4 shrink-0 text-mutedtext transition-transform group-hover:translate-x-1" />
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {view === 'scenario' && activeScenario && (
-          <ScenarioView
-            scenario={activeScenario}
-            onBack={() => setView('list')}
-          />
-        )}
-
-        {view === 'quiz' && activeScenario && (
-          <QuizView
-            scenario={activeScenario}
-            onBack={() => setView('list')}
-          />
-        )}
-      </div>
-    </AppShell>
-  );
+  return <LearnWorkspace />;
 }
 
 function ScenarioView({ scenario, onBack }: { scenario: LearningScenario; onBack: () => void }) {
@@ -291,7 +209,7 @@ function QuizView({ scenario, onBack }: { scenario: LearningScenario; onBack: ()
         {q.opener}
       </div>
 
-      <p className="mb-3 text-sm font-semibold text-charcoal">What does this signal?</p>
+      <p className="mb-3 text-sm font-semibold text-charcoal">Which reply keeps things going?</p>
       <div className="space-y-2">
         {q.options.map((option, idx) => (
           <button

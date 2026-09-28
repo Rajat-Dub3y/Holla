@@ -4,8 +4,44 @@ import Link from 'next/link';
 import { ArrowLeft, Check, Lock } from 'lucide-react';
 import { BRAND, PRICING_TIERS } from '@/lib/brand';
 import { cn } from '@/lib/utils';
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
+import { apiFetch } from '@/lib/api-client';
+import { useMe } from '@/lib/use-me';
 
 export default function PricingPage() {
+  const router = useRouter();
+  const { profile } = useMe();
+  const [managing, setManaging] = useState(false);
+  const [accessUntil, setAccessUntil] = useState<string | null>(null);
+
+  const handlePremiumAction = async () => {
+    if (profile?.tier && profile.tier !== 'free') {
+      setManaging((current) => !current);
+      return;
+    }
+    if (!profile) {
+      router.push('/onboarding');
+      return;
+    }
+    try {
+      const result = await apiFetch<{ checkoutUrl: string }>('/api/stripe/create-checkout-session', { method: 'POST' });
+      window.location.href = result.checkoutUrl;
+    } catch {
+      toast.error('Could not start checkout. Please try again.');
+    }
+  };
+
+  const cancelSubscription = async () => {
+    try {
+      const result = await apiFetch<{ canceled: boolean; accessUntil: string }>('/api/stripe/cancel', { method: 'POST' });
+      setAccessUntil(result.accessUntil);
+      toast.success(`You keep Premium until ${new Date(result.accessUntil).toLocaleDateString()}`);
+    } catch {
+      toast.error('Could not schedule cancellation. Please try again.');
+    }
+  };
   return (
     <div className="min-h-screen bg-cream">
       {/* Nav */}
@@ -90,8 +126,9 @@ export default function PricingPage() {
                 ))}
               </ul>
 
-              <Link
-                href={tier.locked ? '#' : '/onboarding'}
+              {tier.id === 'premium' ? <button
+                type="button"
+                onClick={handlePremiumAction}
                 className={cn(
                   'mt-8 block rounded-lg px-4 py-3 text-center text-sm font-semibold transition-colors',
                   tier.locked
@@ -101,8 +138,21 @@ export default function PricingPage() {
                       : 'border border-beige-300 text-charcoal hover:bg-beige-100'
                 )}
               >
-                {tier.cta}
-              </Link>
+                {profile?.tier && profile.tier !== 'free' ? 'Manage' : 'Upgrade'}
+              </button> : <Link
+                href={tier.locked ? '#' : '/onboarding'}
+                aria-disabled={Boolean(tier.locked)}
+                onClick={(event) => { if (tier.locked) event.preventDefault(); }}
+                className={cn(
+                  'mt-8 block rounded-lg px-4 py-3 text-center text-sm font-semibold transition-colors',
+                  tier.locked
+                    ? 'cursor-default bg-beige-200 text-mutedtext'
+                    : 'border border-beige-300 text-charcoal hover:bg-beige-100'
+                )}
+              >
+                  {tier.cta}
+              </Link>}
+              {tier.id === 'premium' && managing && <div className="mt-3 text-center">{accessUntil ? <p className="text-xs text-mutedtext">You keep Premium until {new Date(accessUntil).toLocaleDateString()}</p> : <button onClick={cancelSubscription} className="text-sm font-medium text-coral hover:underline">Cancel subscription</button>}</div>}
             </div>
           ))}
         </div>

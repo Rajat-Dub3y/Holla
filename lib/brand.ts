@@ -104,8 +104,8 @@ export const PRICING_TIERS = [
     period: 'forever',
     description: 'Get started with daily coaching credits',
     features: [
-      '20 coaching credits per day',
-      'One active conversation at a time',
+      '5 analyses per day',
+      'Two active conversations',
       'Basic conversation insights',
       'Community learning scenarios',
     ],

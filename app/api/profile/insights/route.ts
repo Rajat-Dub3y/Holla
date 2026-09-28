@@ -1,6 +1,8 @@
+import { NextRequest, NextResponse } from "next/server";
+import { getAuthenticatedUserId } from "@/lib/auth";
 import { GoogleGenAI, Type } from "@google/genai";
 import { db } from "@/lib/db";
-import { threads, messages, profileInsights } from "@/lib/Schema";
+import { threads, messages, profileInsights, users } from "@/lib/Schema";
 import { eq, count, avg, sql } from "drizzle-orm";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY });
@@ -123,7 +125,7 @@ stock copy like "Your biggest pattern this month."`,
  * Regeneration clears old insights first — this is a full replace, not an
  * append, since stats-based insights are only meaningful as a current snapshot.
  */
-export async function getOrGenerateProfileInsights(userId: string) {
+async function getOrGenerateProfileInsights(userId: string) {
   const existing = await db.query.profileInsights.findMany({ where: eq(profileInsights.userId, userId) });
 
   const isFresh =
@@ -160,4 +162,25 @@ export async function getOrGenerateProfileInsights(userId: string) {
     .returning();
 
   return inserted;
+}
+
+export async function GET(req: NextRequest) {
+  const userId = await getAuthenticatedUserId(req);
+  if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
+  if (!user) {
+    return NextResponse.json({ error: "User not found" }, { status: 404 });
+  }
+
+  const insights = await getOrGenerateProfileInsights(userId);
+  return NextResponse.json({
+    insights: insights.map(({ body, isLocked, ...insight }) => ({
+      ...insight,
+      body: user.subscriptionTier === "free" && isLocked ? null : body,
+      isLocked,
+    })),
+  });
 }

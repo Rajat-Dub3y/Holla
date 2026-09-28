@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUserId } from "@/lib/auth";
 import { canCreateNewThread } from "@/lib/credits";
 import { db } from "@/lib/db";
-import { threads } from "@/lib/Schema";
-import { eq, desc } from "drizzle-orm";
+import { threads, messages } from "@/lib/Schema";
+import { eq, desc, and, inArray } from "drizzle-orm";
 
 export async function GET(req: NextRequest) {
   const userId = await getAuthenticatedUserId(req);
@@ -18,7 +18,23 @@ export async function GET(req: NextRequest) {
     orderBy: desc(threads.lastActivityAt),
   });
 
-  return NextResponse.json({ threads: userThreads });
+  const threadsWithPreview = await Promise.all(userThreads.map(async (thread) => {
+    const latestMessage = await db.query.messages.findFirst({
+      where: and(eq(messages.threadId, thread.id), inArray(messages.sender, ["match", "user"])),
+      orderBy: desc(messages.createdAt),
+    });
+    const firstUserMessage = await db.query.messages.findFirst({
+      where: and(eq(messages.threadId, thread.id), eq(messages.sender, "user")),
+    });
+    return {
+      ...thread,
+      preview: latestMessage?.content ?? "",
+      lastMessageSender: latestMessage?.sender ?? null,
+      hasUserMessage: Boolean(firstUserMessage),
+    };
+  }));
+
+  return NextResponse.json({ threads: threadsWithPreview });
 }
 
 export async function POST(req: NextRequest) {

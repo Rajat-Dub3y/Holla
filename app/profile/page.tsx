@@ -1,14 +1,29 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Settings, ArrowRight } from 'lucide-react';
+import { signOut } from 'firebase/auth';
+import { toast } from 'sonner';
 import { AppShell } from '@/components/app-shell';
 import { CreditPill } from '@/components/credit-pill';
 import { BRAND, PERSONAS } from '@/lib/brand';
-import { mockUser } from '@/lib/mock-data';
+import { auth } from '@/lib/firebase-client';
+import { useMe } from '@/lib/use-me';
 
 export default function ProfilePage() {
-  const persona = PERSONAS[mockUser.persona];
+  const router = useRouter();
+  const { profile } = useMe();
+  const persona = PERSONAS[profile?.persona ?? 'entrepreneur'];
+
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+      router.push('/');
+    } catch {
+      toast.error('Could not sign out. Please try again.');
+    }
+  };
 
   return (
     <AppShell>
@@ -16,16 +31,16 @@ export default function ProfilePage() {
         {/* Mobile top bar */}
         <div className="mb-6 flex items-center justify-between md:hidden">
           <span className="font-serif text-xl font-bold text-charcoal">{BRAND.name}</span>
-          <CreditPill credits={mockUser.credits} />
+          <CreditPill credits={profile?.credits ?? 0} />
         </div>
 
         {/* Profile header */}
         <div className="mb-8 flex items-center gap-4">
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-beige-300 font-serif text-2xl font-bold text-beige-900">
-            {mockUser.firstName.charAt(0)}
+            {(profile?.firstName ?? 'there').charAt(0)}
           </div>
           <div>
-            <h1 className="font-serif text-2xl font-bold text-charcoal">{mockUser.firstName}</h1>
+            <h1 className="font-serif text-2xl font-bold text-charcoal">{profile?.firstName ?? 'there'}</h1>
             <p className="text-sm text-mutedtext">{persona.label} · {persona.tagline}</p>
           </div>
         </div>
@@ -34,7 +49,7 @@ export default function ProfilePage() {
         <div className="mb-8">
           <h2 className="mb-3 font-serif text-lg font-bold text-charcoal">Your vibe</h2>
           <div className="flex flex-wrap gap-2">
-            {mockUser.vibeTags.map((tag) => (
+            {(profile?.vibeTags ?? []).map((tag) => (
               <span
                 key={tag}
                 className="rounded-full border border-beige-300 bg-white px-3 py-1.5 text-sm font-medium text-charcoal capitalize"
@@ -50,10 +65,10 @@ export default function ProfilePage() {
           <h2 className="font-serif text-lg font-bold text-charcoal">Account</h2>
           <div className="rounded-2xl border border-beige-200 bg-white p-5 md:p-6">
             <div className="space-y-4">
-              <DetailRow label="Plan" value="Free" />
-              <DetailRow label="Apps" value={mockUser.datingApps.join(', ')} />
-              <DetailRow label="Communication style" value={mockUser.communicationStyle} />
-              <DetailRow label="Current focus" value={mockUser.currentFocus} />
+              <DetailRow label="Plan" value={profile?.tier ?? 'free'} />
+              <DetailRow label="Apps" value={profile?.datingApps.join(', ') ?? ''} />
+              <DetailRow label="Communication style" value={profile?.communicationStyle ?? ''} />
+              <DetailRow label="Current focus" value={profile?.currentFocus ?? ''} />
             </div>
           </div>
         </div>
@@ -81,7 +96,7 @@ export default function ProfilePage() {
           <div className="space-y-2">
             <SettingsRow label="Notifications" value="On" />
             <SettingsRow label="Data & privacy" value="Your data is never sold" />
-            <SettingsRow label="Sign out" value="" />
+            <SettingsRow label="Sign out" value="" onClick={handleSignOut} />
           </div>
         </div>
       </div>
@@ -98,9 +113,9 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function SettingsRow({ label, value }: { label: string; value: string }) {
+function SettingsRow({ label, value, onClick }: { label: string; value: string; onClick?: () => void }) {
   return (
-    <button className="flex w-full items-center justify-between rounded-xl border border-beige-200 bg-white px-4 py-3 text-left transition-colors hover:bg-beige-50">
+    <button onClick={onClick} className="flex w-full items-center justify-between rounded-xl border border-beige-200 bg-white px-4 py-3 text-left transition-colors hover:bg-beige-50">
       <span className="flex items-center gap-2 text-sm font-medium text-charcoal">
         <Settings className="h-4 w-4 text-mutedtext" />
         {label}

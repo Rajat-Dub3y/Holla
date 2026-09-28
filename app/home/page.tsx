@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { 
@@ -16,8 +17,9 @@ import {
 } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { CreditPill } from '@/components/credit-pill';
-import { PERSONAS, BRAND } from '@/lib/brand';
-import { mockUser } from '@/lib/mock-data';
+import { BRAND } from '@/lib/brand';
+import { useMe } from '@/lib/use-me';
+import { toast } from 'sonner';
 
 const FEATURES = [
   {
@@ -64,6 +66,22 @@ const CHALLENGE_DAYS = [
 ];
 
 export default function HomePage() {
+  const { profile, mutate } = useMe();
+  const firstName = profile?.firstName ?? 'there';
+
+  useEffect(() => {
+    if (window.location.search.includes('upgraded=1')) {
+      toast.success('Welcome to Premium');
+      let elapsed = 0;
+      const interval = window.setInterval(async () => {
+        const latest = await mutate();
+        elapsed += 2000;
+        if (latest?.user.subscriptionTier !== 'free' || elapsed >= 10000) window.clearInterval(interval);
+      }, 2000);
+      return () => window.clearInterval(interval);
+    }
+  }, [mutate]);
+
   return (
     <AppShell>
       <div className="mx-auto max-w-6xl px-4 py-6 md:px-8 md:py-10">
@@ -79,7 +97,7 @@ export default function HomePage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <CreditPill credits={mockUser.credits} />
+            <CreditPill credits={profile?.credits ?? 0} />
           </div>
         </div>
 
@@ -88,7 +106,7 @@ export default function HomePage() {
           <div>
             <p className="text-xs text-mutedtext">Good evening,</p>
             <h1 className="mt-1 flex items-center gap-2 font-serif text-3xl font-bold text-charcoal md:text-4xl">
-              {mockUser.firstName} <span className="text-xl">👋</span>
+              {firstName} <span className="text-xl">👋</span>
             </h1>
             <p className="mt-1 text-sm text-beige-900/70">
               Ready to make better moves? <br className="hidden md:inline" />
@@ -112,7 +130,7 @@ export default function HomePage() {
               <div className="h-16 w-16 overflow-hidden rounded-full border-2 border-sage p-0.5 shadow-sm">
                 <Image
                   src="https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=400&q=80"
-                  alt={mockUser.firstName}
+                  alt={firstName}
                   width={64}
                   height={64}
                   className="h-full w-full rounded-full object-cover"

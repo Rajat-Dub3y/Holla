@@ -1,5 +1,7 @@
 import './globals.css';
 import type { Metadata } from 'next';
+import { AuthProvider } from '@/components/auth-provider';
+import { Toaster } from '@/components/ui/sonner';
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://holla.app'),
@@ -28,7 +30,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="bg-cream font-sans text-charcoal antialiased">
-        {children}
+        <AuthProvider>
+          {children}
+          <Toaster />
+        </AuthProvider>
       </body>
     </html>
   );
