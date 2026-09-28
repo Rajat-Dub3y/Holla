@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUserId } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { userPersonas, users, datingAppEnum } from "@/lib/schema";
+import { userPersonas, users, datingAppEnum } from "@/lib/Schema";
 import { eq } from "drizzle-orm";
 
 // Same priority order as the frontend's personaId computation in

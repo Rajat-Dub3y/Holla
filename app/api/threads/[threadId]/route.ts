@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUserId } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { threads, messages } from "@/lib/schema";
+import { threads, messages } from "@/lib/Schema";
 import { eq, and, asc } from "drizzle-orm";
 
 export async function GET(

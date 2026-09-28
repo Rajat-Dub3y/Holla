@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUserId } from "@/lib/auth";
 import { canCreateNewThread } from "@/lib/credits";
 import { db } from "@/lib/db";
-import { threads } from "@/lib/schema";
+import { threads } from "@/lib/Schema";
 import { eq, desc } from "drizzle-orm";
 
 export async function GET(req: NextRequest) {
