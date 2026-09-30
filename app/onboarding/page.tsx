@@ -63,6 +63,13 @@ export default function OnboardingPage() {
     getRedirectResult(auth).then((result) => {
       if (result) return finishSignIn(result.user);
     }).catch(() => toast.error('Sign-in did not complete. Please try again.'));
+
+    const unsubscribe = auth.onAuthStateChanged((user) => {
+      if (user && step === 'hook') {
+        finishSignIn(user);
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
   const signInWithGoogle = async () => {
@@ -275,7 +282,7 @@ export default function OnboardingPage() {
               </div>
 
               <button
-                onClick={submitOnboarding}
+                onClick={next}
                 disabled={submitting}
                 className="mt-10 inline-flex items-center gap-2 self-start rounded-lg bg-coral px-6 py-3 text-sm font-semibold text-cream transition-colors hover:bg-coral-dark"
               >
@@ -432,7 +439,7 @@ export default function OnboardingPage() {
                 )}
               </div>
               <button
-                onClick={next}
+                onClick={submitOnboarding}
                 className="mt-10 inline-flex items-center gap-2 self-start rounded-lg bg-coral px-8 py-3.5 text-sm font-semibold text-cream transition-colors hover:bg-coral-dark"
               >
                 {submitting ? 'Saving...' : "Let's go"}
