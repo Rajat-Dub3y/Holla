@@ -9,7 +9,7 @@
  * Keep it under ~6 MB, 10-20 seconds, no audio (it plays muted anyway).
  */
 export const HERO_VIDEO_SRC =
-  'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4';
+  '/videos/hero.mp4';
 
 /** Optional still shown while the video loads or if it fails. Leave '' for none. */
 export const HERO_VIDEO_POSTER = '';
