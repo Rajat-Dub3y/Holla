@@ -9,7 +9,7 @@
  * Keep it under ~6 MB, 10-20 seconds, no audio (it plays muted anyway).
  */
 export const HERO_VIDEO_SRC =
-  '/videos/hero.mp4';
+  '/videos/hero_optimized.mp4';
 
 /** Optional still shown while the video loads or if it fails. Leave '' for none. */
 export const HERO_VIDEO_POSTER = '';
@@ -34,7 +34,6 @@ export const MARQUEE_WORDS = [
   'One next move',
   'Check before you send',
   'Get the date',
-  'Not a reply generator',
   'A coach',
 ];
 

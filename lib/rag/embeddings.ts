@@ -22,18 +22,54 @@ export async function embedText(text: string): Promise<number[]> {
   return values;
 }
 
+const BATCH_SIZE = 20; // chunks per API request — far fewer requests than one-per-chunk
+const PAUSE_BETWEEN_BATCHES_MS = 1500; // keeps us under free-tier requests-per-minute limits
+const MAX_RETRIES = 5;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function embedBatchWithRetry(batch: string[]): Promise<number[][]> {
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const response = await ai.models.embedContent({
+        model: EMBEDDING_MODEL,
+        contents: batch,
+        config: { outputDimensionality: EMBEDDING_DIMENSIONS },
+      });
+
+      const vectors = response.embeddings?.map((e) => e.values);
+      if (!vectors || vectors.length !== batch.length || vectors.some((v) => !v)) {
+        throw new Error("Embedding response did not match batch size");
+      }
+      return vectors as number[][];
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const isRetryable = /429|503|RESOURCE_EXHAUSTED|UNAVAILABLE|rate/i.test(message);
+      if (!isRetryable || attempt === MAX_RETRIES - 1) throw err;
+
+      // Exponential backoff: 2s, 4s, 8s, 16s — a rate-limited retry that
+      // waits is free; hammering the API just burns the quota faster.
+      const waitMs = 2000 * 2 ** attempt;
+      console.warn(`  Embedding rate-limited/unavailable, retrying in ${waitMs / 1000}s...`);
+      await sleep(waitMs);
+    }
+  }
+  throw new Error("unreachable");
+}
+
 /**
- * Batch version — embeds multiple chunks in one call where the API allows
- * it, falling back to sequential calls. Used by the ingestion script, which
- * may need to embed hundreds of chunks from a single long transcript.
+ * Embeds many chunks efficiently: batches them (BATCH_SIZE per request),
+ * paces the requests, and retries with backoff on rate-limit errors.
+ * This is what keeps large-scale ingestion inside the free tier.
  */
 export async function embedTextBatch(texts: string[]): Promise<number[][]> {
-  // Sequential for now — simplest and safest against rate limits on the
-  // free tier. Revisit with actual batch-endpoint support if ingestion
-  // volume grows large enough that this becomes slow.
   const results: number[][] = [];
-  for (const text of texts) {
-    results.push(await embedText(text));
+
+  for (let i = 0; i < texts.length; i += BATCH_SIZE) {
+    const batch = texts.slice(i, i + BATCH_SIZE);
+    results.push(...(await embedBatchWithRetry(batch)));
+    if (i + BATCH_SIZE < texts.length) await sleep(PAUSE_BETWEEN_BATCHES_MS);
   }
+
   return results;
 }
