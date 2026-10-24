@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, ArrowLeft, Apple, Check } from 'lucide-react';
 import { BRAND, ALL_VIBE_TAGS, COACHES } from '@/lib/brand';
@@ -41,35 +41,44 @@ export default function OnboardingPage() {
   const [signingIn, setSigningIn] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  const finishing = useRef(false);
+
   const finishSignIn = async (firebaseUser: User) => {
-    const response = await fetch('/api/auth/session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ idToken: await firebaseUser.getIdToken() }),
-    });
-    if (!response.ok) throw new Error('Could not create your account. Please try again.');
-    const session = await response.json() as { isNewUser: boolean };
-    if (!session.isNewUser) {
+    if (finishing.current) return; // popup + auth listener both call this
+    finishing.current = true;
+    try {
+      const response = await fetch('/api/auth/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken: await firebaseUser.getIdToken() }),
+      });
+      if (!response.ok) throw new Error('Could not create your account. Please try again.');
+
+      // Always check for a saved persona, new user or not.
       const profile = await apiFetch<{ persona: unknown | null }>('/api/user/me');
       if (profile.persona) {
         router.replace('/home');
         return;
       }
+      setStep((s) => (s === 'hook' || s === 'signin' ? 'why' : s));
+    } catch (error) {
+      finishing.current = false; // allow a retry
+      toast.error(error instanceof Error ? error.message : 'Could not sign in. Please try again.');
     }
-    setStep('why');
   };
 
   useEffect(() => {
-    getRedirectResult(auth).then((result) => {
-      if (result) return finishSignIn(result.user);
-    }).catch(() => toast.error('Sign-in did not complete. Please try again.'));
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result) return finishSignIn(result.user);
+      })
+      .catch(() => toast.error('Sign-in did not complete. Please try again.'));
 
     const unsubscribe = auth.onAuthStateChanged((user) => {
-      if (user && step === 'hook') {
-        finishSignIn(user);
-      }
+      if (user) finishSignIn(user);
     });
     return () => unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const signInWithGoogle = async () => {

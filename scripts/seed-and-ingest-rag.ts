@@ -22,7 +22,21 @@ import { HOLLA_SUMMARIES } from "./rag-summaries";
 // 1. WHOLE CHANNELS — every video (newest first, up to maxVideos).
 //    Needs YOUTUBE_DATA_API_KEY in .env.local.
 const CHANNELS: Array<{ coachName: string; channel: string; maxVideos?: number }> = [
-  // { coachName: "Matthew Hussey", channel: "@mattyhussey", maxVideos: 150 },
+  // Run scripts/check-channels.ts first and confirm every handle is the right channel.
+  // 40 newest videos each keeps the first run fast and free. Raise later.
+  { coachName: "Corey Wayne", channel: "@CoachCoreyWayne", maxVideos: 40 },
+  { coachName: "Apollonia Ponti", channel: "@ApolloniaPonti", maxVideos: 40 },
+  { coachName: "Tripp Kramer", channel: "@TrippAdvice", maxVideos: 40 },
+  { coachName: "Marni Kinrys", channel: "@marnikinrys", maxVideos: 40 },
+  { coachName: "Todd Valentine", channel: "@ToddVDating", maxVideos: 40 },
+  { coachName: "Damona Hoffman", channel: "@DamonaHoffman", maxVideos: 40 },
+
+  // ON HOLD until Alexander decides: heavy on frame control / pickup-style
+  // tactics, which conflicts with the brief's "no manipulation" rule.
+  // { coachName: "Alexander Grace", channel: "@AlexanderGrace", maxVideos: 40 },
+  // { coachName: "James Marshall", channel: "@thenaturallifestyles", maxVideos: 40 },
+  // { coachName: "Mark Sing", channel: "@TheUnapologeticManPodcast", maxVideos: 40 },
+  // { coachName: "Casey Zander", channel: "@CaseyZander", maxVideos: 40 },
 ];
 
 // 2. INDIVIDUAL URLs — one-off videos or articles/blog posts.

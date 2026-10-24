@@ -3,7 +3,7 @@ import { retrieveRelevantChunks, formatChunksForPrompt } from "@/lib/rag/retriev
 
 const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY });
 
-const MODEL = "gemini-2.5-flash-lite";
+const MODEL = "gemini-3.5-flash-lite";
 
 // Structured output schema — forces Gemini to return exactly this shape
 // rather than freeform text we'd have to parse and hope matches.
