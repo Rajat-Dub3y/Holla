@@ -1,6 +1,14 @@
 const TARGET_CHUNK_SIZE = 1000; // characters, rough proxy for ~200-250 tokens
 const OVERLAP_SIZE = 150; // characters carried over into the next chunk
 
+/** Last ~OVERLAP_SIZE chars of a chunk, starting at a word boundary (never mid-word). */
+function overlapTail(text: string): string {
+  const tail = text.slice(-OVERLAP_SIZE);
+  if (tail.length === text.length) return tail;
+  const firstSpace = tail.search(/\s/);
+  return firstSpace === -1 ? "" : tail.slice(firstSpace).trim();
+}
+
 /**
  * Splits raw text (a video transcript or blog post body) into overlapping
  * chunks along paragraph boundaries where possible, falling back to
@@ -27,7 +35,7 @@ export function chunkText(rawText: string): string[] {
     // over the tail of the previous chunk as overlap.
     if (current) {
       chunks.push(current);
-      current = current.slice(-OVERLAP_SIZE);
+      current = overlapTail(current);
     }
 
     // A single paragraph longer than the target size on its own gets
@@ -38,7 +46,7 @@ export function chunkText(rawText: string): string[] {
         if ((current + " " + sentence).length <= TARGET_CHUNK_SIZE) {
           current = current ? `${current} ${sentence}` : sentence;
         } else {
-          chunks.push(current);
+          if (current.trim()) chunks.push(current);
           current = sentence;
         }
       }

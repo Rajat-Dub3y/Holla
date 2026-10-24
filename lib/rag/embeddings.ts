@@ -23,8 +23,22 @@ export async function embedText(text: string): Promise<number[]> {
 }
 
 const BATCH_SIZE = 20; // chunks per API request — far fewer requests than one-per-chunk
-const PAUSE_BETWEEN_BATCHES_MS = 1500; // keeps us under free-tier requests-per-minute limits
-const MAX_RETRIES = 5;
+// Free-tier per-minute token limits are tight for embeddings, so pace gently.
+// Override with RAG_EMBED_PAUSE_MS in .env.local (e.g. 6000 if you still see 429s).
+const PAUSE_BETWEEN_BATCHES_MS = Number(process.env.RAG_EMBED_PAUSE_MS ?? 3000);
+const MAX_RETRIES = 6;
+
+/**
+ * Thrown when the API quota is used up (daily limit, or per-minute limit that
+ * didn't clear after all retries). The ingest loop catches this, stops cleanly
+ * and leaves unprocessed sources pending, so the next run resumes right there.
+ */
+export class QuotaExhaustedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "QuotaExhaustedError";
+  }
+}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -44,12 +58,22 @@ async function embedBatchWithRetry(batch: string[]): Promise<number[][]> {
       return vectors as number[][];
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const isRetryable = /429|503|RESOURCE_EXHAUSTED|UNAVAILABLE|rate/i.test(message);
-      if (!isRetryable || attempt === MAX_RETRIES - 1) throw err;
+      const isRateLimit = /429|RESOURCE_EXHAUSTED|rate/i.test(message);
+      const isRetryable = isRateLimit || /503|UNAVAILABLE/i.test(message);
+
+      // A DAILY quota won't clear by waiting a few seconds: stop now and resume later.
+      if (isRateLimit && /per ?day|daily|PerDay/i.test(message)) {
+        throw new QuotaExhaustedError("Daily Gemini quota exhausted.");
+      }
+      if (!isRetryable) throw err;
+      if (attempt === MAX_RETRIES - 1) {
+        if (isRateLimit) throw new QuotaExhaustedError("Rate limit did not clear after retries.");
+        throw err;
+      }
 
       // Exponential backoff: 2s, 4s, 8s, 16s — a rate-limited retry that
       // waits is free; hammering the API just burns the quota faster.
-      const waitMs = 2000 * 2 ** attempt;
+      const waitMs = Math.min(2000 * 2 ** attempt, 60_000);
       console.warn(`  Embedding rate-limited/unavailable, retrying in ${waitMs / 1000}s...`);
       await sleep(waitMs);
     }

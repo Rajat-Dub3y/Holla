@@ -23,6 +23,9 @@ export type RetrievedChunk = {
 export async function retrieveRelevantChunks(
   queryText: string,
   topK: number = 5,
+  // Test run showed relevant chunks score ~0.63-0.74 and off-topic ~0.42,
+  // so 0.5 drops irrelevant matches instead of stuffing them into the prompt.
+  minSimilarity: number = 0.5,
 ): Promise<RetrievedChunk[]> {
   const queryEmbedding = await embedText(queryText);
   const vectorLiteral = toPgVectorLiteral(queryEmbedding);
@@ -40,11 +43,13 @@ export async function retrieveRelevantChunks(
     .orderBy(sql`${ragChunks.embedding} <=> ${vectorLiteral}::vector`)
     .limit(topK);
 
-  return results.map((r) => ({
-    coachName: r.coachName,
-    chunkText: r.chunkText,
-    similarity: 1 - r.distance,
-  }));
+  return results
+    .map((r) => ({
+      coachName: r.coachName,
+      chunkText: r.chunkText,
+      similarity: 1 - r.distance,
+    }))
+    .filter((r) => r.similarity >= minSimilarity);
 }
 
 /**

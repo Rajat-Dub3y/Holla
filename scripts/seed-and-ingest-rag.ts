@@ -73,7 +73,36 @@ async function main() {
   for (const s of INDIVIDUAL_SOURCES) await registerSource(s);
   for (const s of SUMMARIES) await registerSummary(s);
 
-  await processPendingSources();
+  // Quota-aware loop. If Gemini's quota runs out, the ingest stops cleanly and
+  // everything finished so far is kept. With --auto-resume this script then
+  // sleeps until the daily quota resets (midnight US Pacific) and carries on by
+  // itself, as long as this window stays open and the PC stays awake.
+  // Without the flag it just stops; run it again later and it resumes.
+  const autoResume = process.argv.includes("--auto-resume");
+  while (true) {
+    const result = await processPendingSources();
+    if (!result.stoppedForQuota || !autoResume) break;
+    const waitMs = msUntilPacificMidnight() + 10 * 60 * 1000; // +10 min margin
+    const resumeAt = new Date(Date.now() + waitMs);
+    console.log(
+      `Quota used up. Sleeping until ${resumeAt.toLocaleString()} (your local time), then resuming...`,
+    );
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
+}
+
+function msUntilPacificMidnight(): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+    hour12: false,
+  }).formatToParts(new Date());
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+  const hour = get("hour") % 24;
+  const secondsIntoDay = hour * 3600 + get("minute") * 60 + get("second");
+  return (86400 - secondsIntoDay) * 1000;
 }
 
 main()

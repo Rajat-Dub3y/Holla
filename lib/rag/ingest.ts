@@ -1,10 +1,10 @@
 import { YoutubeTranscript } from "youtube-transcript";
 import * as cheerio from "cheerio";
 import { db } from "@/lib/db";
-import { ragSources, ragChunks } from "@/lib/Schema";
+import { ragSources, ragChunks } from "@/lib/schema";
 import { eq, isNull } from "drizzle-orm";
 import { chunkText } from "@/lib/rag/chunk";
-import { embedTextBatch } from "@/lib/rag/embeddings";
+import { embedTextBatch, QuotaExhaustedError } from "@/lib/rag/embeddings";
 import { fetchChannelVideoUrls } from "@/lib/rag/youtube-channel";
 
 async function fetchYoutubeTranscript(videoUrl: string): Promise<string> {
@@ -124,12 +124,43 @@ export async function registerChannel(params: {
  * skipped via the processedAt IS NULL filter, so re-running this doesn't
  * create duplicate chunks.
  */
-export async function processPendingSources() {
-  const pending = await db.query.ragSources.findMany({
+export type IngestResult = {
+  processed: number;
+  failed: number;
+  remaining: number;
+  stoppedForQuota: boolean;
+};
+
+export async function processPendingSources(): Promise<IngestResult> {
+  const unprocessed = await db.query.ragSources.findMany({
     where: isNull(ragSources.processedAt),
   });
 
+  // Order matters when a daily quota can stop the run: hand-written summaries
+  // go first (most value per quota unit), then videos round-robin across
+  // coaches so one coach's channel can't use up the whole day's quota.
+  const summaries = unprocessed.filter((s) => s.sourceType === "summary");
+  const byCoach = new Map<string, typeof unprocessed>();
+  for (const s of unprocessed.filter((s) => s.sourceType !== "summary")) {
+    byCoach.set(s.coachName, [...(byCoach.get(s.coachName) ?? []), s]);
+  }
+  const interleaved: typeof unprocessed = [];
+  for (let i = 0; ; i++) {
+    let added = false;
+    for (const list of byCoach.values()) {
+      if (list[i]) {
+        interleaved.push(list[i]);
+        added = true;
+      }
+    }
+    if (!added) break;
+  }
+  const pending = [...summaries, ...interleaved];
+
   console.log(`Found ${pending.length} pending source(s) to ingest.`);
+  let processed = 0;
+  let failed = 0;
+  let stoppedForQuota = false;
 
   for (const source of pending) {
     try {
@@ -144,8 +175,19 @@ export async function processPendingSources() {
           ? await fetchYoutubeTranscript(source.sourceUrl)
           : await fetchBlogText(source.sourceUrl);
 
+      // YouTube Shorts and tiny clips give 1-2 thin chunks that add noise and burn
+      // embedding quota. Skip them (mark done) unless it's a hand-written summary.
+      const MIN_TRANSCRIPT_CHARS = Number(process.env.RAG_MIN_TRANSCRIPT_CHARS ?? 1500);
+      if (source.sourceType === "youtube" && rawText.trim().length < MIN_TRANSCRIPT_CHARS) {
+        console.log(`  Too short (${rawText.trim().length} chars, likely a Short) — skipped.`);
+        await db.update(ragSources).set({ processedAt: new Date() }).where(eq(ragSources.id, source.id));
+        continue;
+      }
+
       if (!rawText.trim()) {
-        console.warn(`No text extracted from ${source.sourceUrl} — skipping.`);
+        // Nothing to embed (e.g. no captions). Mark done so it isn't retried every run.
+        console.warn(`No text extracted from ${source.sourceUrl} — marking as done.`);
+        await db.update(ragSources).set({ processedAt: new Date() }).where(eq(ragSources.id, source.id));
         continue;
       }
 
@@ -154,6 +196,8 @@ export async function processPendingSources() {
 
       // Insert in batches — a long video can produce hundreds of chunks,
       // and one giant INSERT statement risks hitting query-size limits.
+      // Clear any partial chunks from an earlier interrupted attempt so a retry never duplicates.
+      await db.delete(ragChunks).where(eq(ragChunks.sourceId, source.id));
       const INSERT_BATCH_SIZE = 100;
       for (let i = 0; i < chunks.length; i += INSERT_BATCH_SIZE) {
         await db.insert(ragChunks).values(
@@ -172,10 +216,24 @@ export async function processPendingSources() {
         .where(eq(ragSources.id, source.id));
 
       console.log(`  → ${chunks.length} chunks embedded and stored.`);
+      processed++;
     } catch (err) {
+      if (err instanceof QuotaExhaustedError) {
+        // Stop the whole run. This source stays pending; nothing is lost.
+        console.warn(`\nStopped: ${err.message} Re-run later and it resumes from this source.`);
+        stoppedForQuota = true;
+        break;
+      }
+      failed++;
       // Don't let one bad source (a video with captions disabled, a blog
       // that blocks scraping, etc.) abort the whole ingestion run.
       console.error(`Failed to ingest ${source.sourceUrl}:`, err);
     }
   }
+
+  const remaining = (
+    await db.query.ragSources.findMany({ where: isNull(ragSources.processedAt) })
+  ).length;
+  console.log(`Done this run: ${processed} ingested, ${failed} failed, ${remaining} still pending.`);
+  return { processed, failed, remaining, stoppedForQuota };
 }
