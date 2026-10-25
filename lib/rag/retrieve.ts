@@ -8,6 +8,7 @@ function toPgVectorLiteral(embedding: number[]): string {
 }
 
 export type RetrievedChunk = {
+  id: string;
   coachName: string;
   chunkText: string;
   similarity: number;
@@ -38,6 +39,7 @@ export async function retrieveRelevantChunks(
   const CANDIDATES = Math.max(topK * 4, 20);
   const results = await db
     .select({
+      id: ragChunks.id,
       coachName: ragChunks.coachName,
       chunkText: ragChunks.chunkText,
       distance: sql<number>`${ragChunks.embedding} <=> ${vectorLiteral}::vector`,
@@ -52,6 +54,7 @@ export async function retrieveRelevantChunks(
 
   const ranked = results
     .map((r) => ({
+      id: r.id,
       coachName: r.coachName,
       chunkText: r.chunkText,
       similarity: 1 - r.distance,

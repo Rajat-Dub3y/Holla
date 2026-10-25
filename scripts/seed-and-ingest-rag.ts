@@ -5,6 +5,7 @@ import {
   processPendingSources,
 } from "@/lib/rag/ingest";
 import { HOLLA_SUMMARIES } from "./rag-summaries";
+import { BOOK_SUMMARIES } from "./rag-books";
 
 /**
  * Fill in the three lists below with REAL, verified sources. I deliberately
@@ -55,6 +56,7 @@ const INDIVIDUAL_SOURCES: Array<{
 //    each with a sentence or two on what it means in practice.
 const SUMMARIES: Array<{ coachName: string; title: string; text: string }> = [
   ...HOLLA_SUMMARIES,
+  ...BOOK_SUMMARIES,
   // {
   //   coachName: "Corey Wayne",
   //   title: "How to Be a 3% Man — key principles",
@@ -69,9 +71,10 @@ async function main() {
     return;
   }
 
-  for (const c of CHANNELS) await registerChannel(c);
-  for (const s of INDIVIDUAL_SOURCES) await registerSource(s);
-  for (const s of SUMMARIES) await registerSummary(s);
+  // Every step is safe to repeat, so a dropped connection just retries it.
+  for (const c of CHANNELS) await withRetry(() => registerChannel(c));
+  for (const s of INDIVIDUAL_SOURCES) await withRetry(() => registerSource(s));
+  for (const s of SUMMARIES) await withRetry(() => registerSummary(s));
 
   // Quota-aware loop. If Gemini's quota runs out, the ingest stops cleanly and
   // everything finished so far is kept. With --auto-resume this script then
@@ -80,7 +83,7 @@ async function main() {
   // Without the flag it just stops; run it again later and it resumes.
   const autoResume = process.argv.includes("--auto-resume");
   while (true) {
-    const result = await processPendingSources();
+    const result = await withRetry(() => processPendingSources());
     if (!result.stoppedForQuota || !autoResume) break;
     const waitMs = msUntilPacificMidnight() + 10 * 60 * 1000; // +10 min margin
     const resumeAt = new Date(Date.now() + waitMs);
@@ -88,6 +91,22 @@ async function main() {
       `Quota used up. Sleeping until ${resumeAt.toLocaleString()} (your local time), then resuming...`,
     );
     await new Promise((r) => setTimeout(r, waitMs));
+  }
+}
+
+/** Retries transient network failures (e.g. a Neon connect timeout) a few times. */
+async function withRetry<T>(fn: () => Promise<T>, attempts = 5): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const text = String(err) + String((err as { cause?: unknown })?.cause ?? "");
+      const transient = /fetch failed|ConnectTimeout|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(text);
+      if (!transient || i >= attempts) throw err;
+      const waitMs = 5000 * i;
+      console.warn(`Network hiccup (attempt ${i}/${attempts}). Retrying in ${waitMs / 1000}s...`);
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
   }
 }
 

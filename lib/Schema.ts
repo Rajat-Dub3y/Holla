@@ -274,3 +274,47 @@ export const ragSourcesRelations = relations(ragSources, ({ many }) => ({
 export const ragChunksRelations = relations(ragChunks, ({ one }) => ({
   source: one(ragSources, { fields: [ragChunks.sourceId], references: [ragSources.id] }),
 }));
+
+
+export const betaRequests = pgTable(
+  "beta_requests",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    sessionId: varchar("session_id", { length: 64 }).notNull(),
+    ipHash: varchar("ip_hash", { length: 64 }).notNull(),
+    inputType: varchar("input_type", { length: 24 }),
+    sourceApp: varchar("source_app", { length: 24 }),
+    mode: varchar("mode", { length: 24 }),
+    stage: varchar("stage", { length: 24 }),
+    hadImage: boolean("had_image").notNull().default(false),
+    herMessage: text("her_message"),
+    readText: text("read_text"),
+    replies: jsonb("replies"),
+    nextMove: text("next_move"),
+    retrievedSources: jsonb("retrieved_sources"), // [{id, coach, similarity}]
+    understanding: jsonb("understanding"), // step-1 output (no names)
+    latencyMs: integer("latency_ms"),
+    error: text("error"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    createdIdx: index("beta_requests_created_idx").on(t.createdAt),
+    ipIdx: index("beta_requests_ip_idx").on(t.ipHash),
+  }),
+);
+
+export const betaFeedback = pgTable(
+  "beta_feedback",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    requestId: uuid("request_id")
+      .notNull()
+      .references(() => betaRequests.id, { onDelete: "cascade" }),
+    replyIndex: integer("reply_index").notNull(), // 0 = recommended
+    vote: varchar("vote", { length: 8 }).notNull(), // "up" | "down"
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    requestIdx: index("beta_feedback_request_idx").on(t.requestId),
+  }),
+);
