@@ -1,15 +1,39 @@
 import { YoutubeTranscript } from "youtube-transcript";
 import * as cheerio from "cheerio";
 import { db } from "@/lib/db";
-import { ragSources, ragChunks } from "@/lib/schema";
+import { ragSources, ragChunks } from "@/lib/Schema";
 import { eq, isNull } from "drizzle-orm";
 import { chunkText } from "@/lib/rag/chunk";
 import { embedTextBatch, QuotaExhaustedError } from "@/lib/rag/embeddings";
 import { fetchChannelVideoUrls } from "@/lib/rag/youtube-channel";
 
+/**
+ * Auto-captions contain noise that hurts retrieval and shows up in prompts:
+ * censor markers like "[ __ ]", sound tags like "[Music]", HTML entities,
+ * and repeated spaces. Strip them before chunking.
+ */
+function cleanTranscript(text: string): string {
+  return text
+    .replace(/\[\s*_+\s*\]/g, "")
+    .replace(/\[(?:music|applause|laughter|silence|inaudible)\]/gi, "")
+    .replace(/&amp;#39;|&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/** Share of letters that are not Latin script (catches Arabic/Hindi/etc. captions). */
+function nonLatinRatio(text: string): number {
+  const letters = text.match(/\p{L}/gu) ?? [];
+  if (letters.length === 0) return 0;
+  const latin = text.match(/[A-Za-z\u00C0-\u024F]/g) ?? [];
+  return 1 - latin.length / letters.length;
+}
+
 async function fetchYoutubeTranscript(videoUrl: string): Promise<string> {
   const transcriptSegments = await YoutubeTranscript.fetchTranscript(videoUrl);
-  return transcriptSegments.map((seg) => seg.text).join(" ");
+  return cleanTranscript(transcriptSegments.map((seg) => seg.text).join(" "));
 }
 
 async function fetchBlogText(blogUrl: string): Promise<string> {
@@ -180,6 +204,12 @@ export async function processPendingSources(): Promise<IngestResult> {
       const MIN_TRANSCRIPT_CHARS = Number(process.env.RAG_MIN_TRANSCRIPT_CHARS ?? 1500);
       if (source.sourceType === "youtube" && rawText.trim().length < MIN_TRANSCRIPT_CHARS) {
         console.log(`  Too short (${rawText.trim().length} chars, likely a Short) — skipped.`);
+        await db.update(ragSources).set({ processedAt: new Date() }).where(eq(ragSources.id, source.id));
+        continue;
+      }
+
+      if (source.sourceType === "youtube" && nonLatinRatio(rawText) > 0.2) {
+        console.log("  Transcript is not in English — skipped.");
         await db.update(ragSources).set({ processedAt: new Date() }).where(eq(ragSources.id, source.id));
         continue;
       }

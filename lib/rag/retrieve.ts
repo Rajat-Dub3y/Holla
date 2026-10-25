@@ -33,6 +33,9 @@ export async function retrieveRelevantChunks(
   // pgvector's `<=>` operator is cosine DISTANCE (0 = identical, 2 = opposite),
   // so similarity = 1 - distance. Ordering by distance ascending gives the
   // most similar chunks first.
+  // Pull a wider candidate pool, then re-rank for balance. Without this, the
+  // coach with the most transcript chunks can fill every slot.
+  const CANDIDATES = Math.max(topK * 4, 20);
   const results = await db
     .select({
       coachName: ragChunks.coachName,
@@ -41,15 +44,36 @@ export async function retrieveRelevantChunks(
     })
     .from(ragChunks)
     .orderBy(sql`${ragChunks.embedding} <=> ${vectorLiteral}::vector`)
-    .limit(topK);
+    .limit(CANDIDATES);
 
-  return results
+  const SUMMARY_LABEL = "Holla Playbook"; // our curated summaries
+  const SUMMARY_BOOST = 0.04; // curated, cleaner text wins close calls
+  const MAX_PER_COACH = 2;
+
+  const ranked = results
     .map((r) => ({
       coachName: r.coachName,
       chunkText: r.chunkText,
       similarity: 1 - r.distance,
     }))
-    .filter((r) => r.similarity >= minSimilarity);
+    .filter((r) => r.similarity >= minSimilarity)
+    .sort(
+      (a, b) =>
+        b.similarity + (b.coachName === SUMMARY_LABEL ? SUMMARY_BOOST : 0) -
+        (a.similarity + (a.coachName === SUMMARY_LABEL ? SUMMARY_BOOST : 0)),
+    );
+
+  const perCoach = new Map<string, number>();
+  const picked: RetrievedChunk[] = [];
+  for (const chunk of ranked) {
+    const used = perCoach.get(chunk.coachName) ?? 0;
+    const cap = chunk.coachName === SUMMARY_LABEL ? MAX_PER_COACH + 1 : MAX_PER_COACH;
+    if (used >= cap) continue;
+    perCoach.set(chunk.coachName, used + 1);
+    picked.push(chunk);
+    if (picked.length === topK) break;
+  }
+  return picked;
 }
 
 /**
