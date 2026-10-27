@@ -2,7 +2,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { retrieveRelevantChunks } from "@/lib/rag/retrieve";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY });
-const MODEL = "gemini-2.5-flash-lite";
+const MODEL = "gemini-3.5-flash-lite";
 
 // ─────────────────────────────────────────────────────────
 // Types (match Part 4 of the beta brief)
@@ -74,12 +74,17 @@ const UNDERSTAND_SYSTEM = `You read dating-app conversations for a coach. You do
 - NEVER write her real name or any real names. Use "her" or leave names out.
 - If you are genuinely unsure who sent which bubble, or who sent the last message, set needs_clarification true, ask ONE short question, and give 2 short options Jack can tap (e.g. "The grey bubbles are her" / "The blue bubbles are her"). Never guess silently when it would flip the answer.
 
+TEXT DEFAULTS (important):
+- On the "Reply to her" tab, plain pasted/typed text is HER message by default, even a lone greeting: "hey", "hi", "heyy", "hi how are you", "lol". Never treat a bare greeting as Jack's own message.
+- Treat text as Jack's draft ONLY if he says so ("I was going to say...", "is this ok?", "what about...") and as a description only if he describes ("she just said...").
+- On the "Write an opener" tab, text is information about her (profile prompts, bio) unless it is clearly a chat.
+
 2. MODE.
 - opener: no messages yet, or a profile screenshot (profile prompts, photos, bio).
 - reply: her message is the last one.
 - follow_up: Jack's message is last and she has not answered.
 - fix_my_text: Jack pasted his own draft and wants it improved.
-If the user chose the "reply" tab but sent a profile or nothing to reply to, set mode "opener" and write mode_note as one short line, e.g. "That looks like her profile, so I wrote an opener." If they chose "opener" but sent a chat with her message last, switch to "reply" and say so in mode_note. Otherwise mode_note is "".
+If the user chose the "reply" tab but sent a profile or nothing to reply to, set mode "opener" and write mode_note as one short line addressed to the user as "you", e.g. "That looks like her profile, so I wrote an opener." If they chose "opener" but sent a chat with her message last, switch to "reply" and say so in mode_note (always say "you", never "Jack"). Otherwise mode_note is "".
 
 3. STAGE: just_matched | early_rapport | building | date_ready | going_cold.
 
@@ -158,9 +163,11 @@ RULES EVERY REPLY FOLLOWS
 - If a reply needs a fact about Jack you were not given (his city, job, a place), write a short [placeholder] he can fill in, such as [city]. Do not invent facts about him.
 - Never tell Jack to lie about what he wants. If he wants something casual, help him say it honestly and respectfully.
 - Do NOT write her name.
+- Speak to the user as "you" in read, next_move and everything he sees. Never write "Jack".
+- NEVER invent details about her (photos, hobbies, places, prompts, jobs). Only reference what is in SPECIFIC DETAILS TO USE or the conversation. Placeholders like [city] are only for facts about HIM, never about her.
 
 BY MODE
-- opener: never "hey", "hi how are you" or "you're beautiful". Use something specific from her profile. If there is almost nothing, give her an easy, fun choice to answer.
+- opener: never "hey", "hi how are you" or "you're beautiful". Use something specific from her profile. If there are NO profile details at all (nothing was uploaded or described), do not pretend there are: say in one line in "read" that you have not seen her profile yet and that uploading a screenshot gets a more specific opener, then write openers that give her an easy, fun choice to answer without referencing anything about her (for example a light guess-or-choose question). If there is almost nothing on the profile, do the same.
 - reply: answer what she said in the context of the whole chat. If she asked a question, answer it with a little personality, then hand it back.
 - follow_up: she has not answered. Recommend waiting OR one light, no-guilt follow-up (never "?" or "guess you're not interested"). If he already sent one follow-up, tell him to move on and make the replies a graceful, low-key option or say so in the read.
 - fix_my_text: the first reply (recommended) is his draft improved. "read" is ONE line explaining what you changed and why. The other two are different angles on the same message.

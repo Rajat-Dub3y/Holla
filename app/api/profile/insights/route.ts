@@ -6,7 +6,7 @@ import { threads, messages, profileInsights, users } from "@/lib/Schema";
 import { eq, count, avg, sql } from "drizzle-orm";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY });
-const MODEL = "gemini-2.5-flash-lite";
+const MODEL = "gemini-3.5-flash-lite";
 
 const INSIGHTS_STALE_AFTER_MS = 1000 * 60 * 60 * 24; // regenerate once a day at most
 

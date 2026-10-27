@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowUp, Check, Copy, Paperclip, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { BRAND } from '@/lib/brand';
 import { cn } from '@/lib/utils';
-// @ts-expect-error Next.js handles the app-level stylesheet side-effect import.
 import '../landing.css'; // typing-dots + pop-in animations
 
 // ─────────────────────────────────────────────────────────
@@ -478,7 +477,7 @@ function ResultCard({
       {result.read && (
         <div className="rounded-lg border-l-2 border-coral bg-beige-50 px-3 py-2.5">
           <span className="font-mono text-[10px] uppercase tracking-wider text-coral">
-            {result.mode === 'fix_my_text' ? 'What I changed' : "What she's saying"}
+            {result.mode === 'fix_my_text' ? 'What I changed' : result.mode === 'opener' ? 'What to lead with' : "What she's saying"}
           </span>
           <p className="mt-1 text-sm leading-relaxed text-charcoal">{result.read}</p>
         </div>
