@@ -27,7 +27,7 @@ export function LandingNav() {
           {BRAND.name}
         </Link>
         <nav className="flex items-center gap-2 md:gap-5" aria-label="Primary">
-          <a href="#try-it" className="hidden text-sm text-charcoal/70 hover:text-charcoal md:block">
+          <a href="/beta" className="hidden text-sm text-charcoal/70 hover:text-charcoal md:block">
             Try it
           </a>
           <a href="#how" className="hidden text-sm text-charcoal/70 hover:text-charcoal md:block">

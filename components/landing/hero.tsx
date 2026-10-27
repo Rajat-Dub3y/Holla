@@ -85,7 +85,7 @@ export function Hero() {
               style={{ animationDelay: '400ms' }}
             >
               <a
-                href="#try-it"
+                href="/beta"
                 className="inline-flex items-center justify-center gap-2 rounded-lg bg-coral px-6 py-3 text-sm font-semibold text-cream transition-colors hover:bg-coral-dark"
               >
                 Try it right now

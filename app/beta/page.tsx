@@ -261,7 +261,7 @@ export default function BetaPage() {
           )}
         </div>
 
-        {/* Mode switch */}
+        {/* Mode switch 
         <div
           role="tablist"
           aria-label="Mode"
@@ -284,7 +284,7 @@ export default function BetaPage() {
               {label}
             </button>
           ))}
-        </div>
+        </div>*/}
 
         {/* Thread */}
         <div className="mt-6 flex-1 space-y-5" aria-live="polite">
