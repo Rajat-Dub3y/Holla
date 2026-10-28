@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUp, Check, Copy, Paperclip, ThumbsDown, ThumbsUp, X } from 'lucide-react';
+import { ArrowUp, Check, Copy, Paperclip, Plus, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { BRAND } from '@/lib/brand';
 import { cn } from '@/lib/utils';
+import { auth } from '@/lib/firebase-client';
 import '../landing.css'; // typing-dots + pop-in animations
 
 // ─────────────────────────────────────────────────────────
@@ -16,6 +17,10 @@ const HEADLINE = 'Looking for an exciting opener, or not sure what to reply? Try
 const SUBLINE =
   "We've collected the knowledge of top dating coaches, so you don't have to.";
 const PLACEHOLDER = 'Paste her reply, type it, or upload a screenshot.';
+const OPENER_PLACEHOLDER = 'Upload a screenshot of her profile, or paste her bio or a prompt she answered.';
+const OPENER_TAB_LINE =
+  'A screenshot of her profile works best. Add yours too if you like, and Holla will write an opener with personality.';
+const ABOUT_PLACEHOLDER = 'e.g. I climb, cook badly, live in Austin, work in design';
 const OPENER_LINE =
   'Looking for an opener? Upload a screenshot of her profile — and yours if you like — and Holla will write one with personality.';
 
@@ -33,6 +38,8 @@ type Result = {
   next_move: string;
   mode_note?: string;
   clarify?: { question: string; options: string[] };
+  context_request?: string;
+  style_label?: string;
   retrieved_sources?: Array<{ id: string; coach: string; similarity: number }>;
   latencyMs?: number;
 };
@@ -76,6 +83,9 @@ export default function BetaPage() {
   const [loading, setLoading] = useState(false);
   const [votes, setVotes] = useState<Record<string, 'up' | 'down'>>({});
   const [copied, setCopied] = useState<string | null>(null);
+  const [firstMover, setFirstMover] = useState<'auto' | 'she' | 'me'>('auto');
+  const [aboutMe, setAboutMe] = useState('');
+  const [showAbout, setShowAbout] = useState(false);
 
   const sessionId = useRef('anon');
   const debugKey = useRef<string | null>(null);
@@ -95,6 +105,12 @@ export default function BetaPage() {
       sessionId.current = id;
     } catch {
       /* storage unavailable: fine */
+    }
+    try {
+      const saved = localStorage.getItem('holla-beta-about');
+      if (saved) setAboutMe(saved);
+    } catch {
+      /* ignore */
     }
     debugKey.current = new URLSearchParams(window.location.search).get('debug');
   }, []);
@@ -137,11 +153,19 @@ export default function BetaPage() {
     setLoading(true);
     lastInput.current = input;
     try {
+      // Signed-in users (who did onboarding) get their style applied server-side.
+      let token: string | undefined;
+      try {
+        token = await auth.currentUser?.getIdToken();
+      } catch {
+        /* not signed in: anonymous beta */
+      }
       const res = await fetch('/api/beta/reply', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(debugKey.current ? { 'x-beta-debug': debugKey.current } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           sessionId: sessionId.current,
@@ -150,6 +174,8 @@ export default function BetaPage() {
           images: input.images.map(({ mimeType, data }) => ({ mimeType, data })),
           history: currentHistory,
           hint,
+          firstMover: tab === 'reply' ? firstMover : 'auto',
+          aboutMe: aboutMe.trim() || undefined,
         }),
       });
       const data = await res.json();
@@ -261,7 +287,7 @@ export default function BetaPage() {
           )}
         </div>
 
-        {/* Mode switch 
+        {/* Mode switch */}
         <div
           role="tablist"
           aria-label="Mode"
@@ -284,7 +310,37 @@ export default function BetaPage() {
               {label}
             </button>
           ))}
-        </div>*/}
+        </div>
+
+        {/* Mode-specific context */}
+        {tab === 'reply' ? (
+          <div className="mx-auto mt-4 flex flex-wrap items-center justify-center gap-2 text-xs text-mutedtext">
+            <span>Who messaged first?</span>
+            {([
+              ['auto', 'Not sure'],
+              ['she', 'She did'],
+              ['me', 'I did'],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setFirstMover(id)}
+                aria-pressed={firstMover === id}
+                className={cn(
+                  'rounded-full border px-3 py-1 font-medium transition-colors',
+                  firstMover === id
+                    ? 'border-coral bg-coral/10 text-charcoal'
+                    : 'border-beige-300 hover:border-beige-400'
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="mx-auto mt-4 max-w-md text-center text-xs text-mutedtext">
+            No messages yet? I&apos;ll write the first one from her profile.
+          </p>
+        )}
 
         {/* Thread */}
         <div className="mt-6 flex-1 space-y-5" aria-live="polite">
@@ -322,6 +378,8 @@ export default function BetaPage() {
                 onCopy={copyReply}
                 onVote={vote}
                 onClarify={answerClarification}
+                onUpload={() => fileInput.current?.click()}
+                onFocusBox={() => boxRef.current?.focus()}
                 disabled={loading}
               />
             );
@@ -341,6 +399,37 @@ export default function BetaPage() {
 
         {/* Input box */}
         <div className="sticky bottom-0 mt-6 bg-cream pb-2 pt-2">
+          {showAbout ? (
+            <div className="mb-2 rounded-xl border border-beige-300 bg-white p-2">
+              <label className="px-1 font-mono text-[10px] uppercase tracking-wider text-mutedtext">
+                About you (optional, used to make replies sound like you)
+              </label>
+              <textarea
+                value={aboutMe}
+                onChange={(e) => {
+                  setAboutMe(e.target.value);
+                  try {
+                    localStorage.setItem('holla-beta-about', e.target.value);
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                rows={2}
+                maxLength={400}
+                placeholder={ABOUT_PLACEHOLDER}
+                className="mt-1 w-full resize-none bg-transparent px-1 text-sm text-charcoal outline-none placeholder:text-mutedtext"
+              />
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowAbout(true)}
+              className="mb-2 inline-flex items-center gap-1 text-xs font-medium text-mutedtext hover:text-coral"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {aboutMe.trim() ? 'Edit what I know about you' : 'Add something about you (optional)'}
+            </button>
+          )}
+
           {attachments.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-2">
               {attachments.map((a, i) => (
@@ -372,7 +461,7 @@ export default function BetaPage() {
                 }
               }}
               rows={1}
-              placeholder={PLACEHOLDER}
+              placeholder={tab === 'opener' ? OPENER_PLACEHOLDER : PLACEHOLDER}
               aria-label="Her message, a screenshot, or your draft"
               className="max-h-[200px] flex-1 resize-none bg-transparent px-2 py-2 text-sm text-charcoal outline-none placeholder:text-mutedtext"
             />
@@ -405,7 +494,7 @@ export default function BetaPage() {
             </button>
           </div>
 
-          <p className="mt-3 text-center text-xs leading-relaxed text-mutedtext">{OPENER_LINE}</p>
+          <p className="mt-3 text-center text-xs leading-relaxed text-mutedtext">{tab === 'opener' ? OPENER_TAB_LINE : OPENER_LINE}</p>
         </div>
       </div>
     </div>
@@ -419,6 +508,8 @@ function ResultCard({
   onCopy,
   onVote,
   onClarify,
+  onUpload,
+  onFocusBox,
   disabled,
 }: {
   result: Result;
@@ -427,6 +518,8 @@ function ResultCard({
   onCopy: (key: string, text: string) => void;
   onVote: (result: Result, index: number, v: 'up' | 'down') => void;
   onClarify: (option: string) => void;
+  onUpload: () => void;
+  onFocusBox: () => void;
   disabled: boolean;
 }) {
   // One quick tap instead of guessing who is who.
@@ -460,6 +553,33 @@ function ResultCard({
   return (
     <div className="lp-pop space-y-3">
       {result.mode_note && <p className="font-mono text-xs text-coral">{result.mode_note}</p>}
+      {result.style_label && (
+        <p className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">
+          Written in your style · {result.style_label}
+        </p>
+      )}
+
+      {/* Opener with nothing to work from: ask for context */}
+      {result.context_request && (
+        <div className="rounded-xl border-l-2 border-coral bg-beige-50 p-4">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-coral">Want it sharper?</p>
+          <p className="mt-1 text-sm text-charcoal">{result.context_request}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              onClick={onUpload}
+              className="rounded-full border border-beige-300 bg-white px-4 py-2 text-sm font-medium text-charcoal transition-colors hover:border-coral"
+            >
+              Upload her profile
+            </button>
+            <button
+              onClick={onFocusBox}
+              className="rounded-full border border-beige-300 bg-white px-4 py-2 text-sm font-medium text-charcoal transition-colors hover:border-coral"
+            >
+              Tell me about her
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 1. Her message, as Holla read it */}
       {result.her_message && (

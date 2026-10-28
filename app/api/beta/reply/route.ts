@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { and, gte, sql, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { betaRequests } from "@/lib/Schema";
+import { betaRequests, userPersonas } from "@/lib/Schema";
+import { getAuthenticatedUserId } from "@/lib/auth";
 import { runBetaPipeline, type BetaImage, type HistoryTurn } from "@/lib/beta/pipeline";
 
 export const runtime = "nodejs";
@@ -33,6 +34,8 @@ export async function POST(req: NextRequest) {
     images?: BetaImage[];
     history?: HistoryTurn[];
     hint?: string;
+    firstMover?: "auto" | "she" | "me";
+    aboutMe?: string;
   };
   try {
     body = await req.json();
@@ -45,6 +48,8 @@ export async function POST(req: NextRequest) {
   const mode = body.mode === "opener" ? "opener" : "reply";
   const sessionId = (body.sessionId ?? "anon").slice(0, 64);
   const hint = body.hint?.slice(0, 200);
+  const firstMover = body.firstMover === "she" || body.firstMover === "me" ? body.firstMover : "auto";
+  const aboutMe = (body.aboutMe ?? "").slice(0, 400);
   const history = (body.history ?? [])
     .filter((t) => (t.sender === "her" || t.sender === "him") && typeof t.text === "string")
     .slice(-30)
@@ -83,8 +88,31 @@ export async function POST(req: NextRequest) {
     console.error("[beta] limit check failed (continuing):", err);
   }
 
+  // Optional: signed-in users get their onboarding style applied. Anonymous
+  // beta testers simply skip this. The persona is read from the DB using the
+  // verified token, never trusted from the request body.
+  let persona: { vibes: string[]; commStyle?: string | null; focus?: string | null } | undefined;
   try {
-    const result = await runBetaPipeline({ requestedMode: mode, text, images, history, hint });
+    const userId = await getAuthenticatedUserId(req);
+    if (userId) {
+      const row = await db.query.userPersonas.findFirst({ where: eq(userPersonas.userId, userId) });
+      if (row) persona = { vibes: row.vibeTags ?? [], commStyle: row.communicationStyle, focus: row.focusArea };
+    }
+  } catch (err) {
+    console.error("[beta] persona lookup failed (continuing without it):", err);
+  }
+
+  try {
+    const result = await runBetaPipeline({
+      requestedMode: mode,
+      text,
+      images,
+      history,
+      hint,
+      firstMover,
+      aboutMe,
+      persona,
+    });
     const latencyMs = Date.now() - started;
 
     let requestId: string | null = null;
@@ -104,7 +132,10 @@ export async function POST(req: NextRequest) {
           replies: result.replies,
           nextMove: result.next_move,
           retrievedSources: result.retrieved_sources,
-          understanding: result.understanding,
+          understanding: {
+            ...result.understanding,
+            _context: { firstMover, hadAboutMe: aboutMe.length > 0, persona: persona ?? null },
+          },
           latencyMs,
         })
         .returning({ id: betaRequests.id });

@@ -2,7 +2,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { retrieveRelevantChunks } from "@/lib/rag/retrieve";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY });
-const MODEL = "gemini-3.5-flash-lite";
+const MODEL = "gemini-2.5-flash-lite";
 
 // ─────────────────────────────────────────────────────────
 // Types (match Part 4 of the beta brief)
@@ -21,6 +21,12 @@ export type BetaInput = {
   history?: HistoryTurn[];
   /** A one-tap correction, e.g. "The grey bubbles are her". */
   hint?: string;
+  /** Who started the conversation. "auto" = work it out from the chat. */
+  firstMover?: "auto" | "she" | "me";
+  /** Free text the user chose to share about himself (job, city, hobbies). */
+  aboutMe?: string;
+  /** From onboarding (signed-in users only). */
+  persona?: { vibes: string[]; commStyle?: string | null; focus?: string | null };
 };
 
 type Understanding = {
@@ -55,6 +61,10 @@ export type BetaResult = {
   retrieved_sources: Array<{ id: string; coach: string; similarity: number }>;
   mode_note?: string;
   clarify?: { question: string; options: string[] };
+  /** Opener mode with nothing to work from: asks for context. */
+  context_request?: string;
+  /** e.g. "Direct · Social, Funny" when the user's onboarding style was used. */
+  style_label?: string;
   /** Step-1 output, logged for debugging. Never contains screenshots. */
   understanding: Understanding;
 };
@@ -166,6 +176,15 @@ RULES EVERY REPLY FOLLOWS
 - Speak to the user as "you" in read, next_move and everything he sees. Never write "Jack".
 - NEVER invent details about her (photos, hobbies, places, prompts, jobs). Only reference what is in SPECIFIC DETAILS TO USE or the conversation. Placeholders like [city] are only for facts about HIM, never about her.
 
+WRITING IN HIS VOICE
+- If a USER STYLE block is given, write the replies the way HE would text: match his communication style, and let his interests colour his side (never invent specifics he did not give). Prefer the recommended style that fits him when it also fits her signal. Never mention his profile, settings or "style".
+- If an ABOUT HIM block is given, use those facts for his side (his city, job, hobbies) instead of [placeholders]. Only use what is written there.
+
+WHO MESSAGED FIRST
+- She messaged first: she has already put effort in. Appreciate it lightly (never over-thank), reciprocate with something specific, and you can move toward meeting a little sooner if the chat is going well.
+- He messaged first and she replied: build on her answer, keep momentum, do not over-celebrate that she replied. If she is low effort, he leads.
+- Unknown: work it out from the conversation.
+
 BY MODE
 - opener: never "hey", "hi how are you" or "you're beautiful". Use something specific from her profile. If there are NO profile details at all (nothing was uploaded or described), do not pretend there are: say in one line in "read" that you have not seen her profile yet and that uploading a screenshot gets a more specific opener, then write openers that give her an easy, fun choice to answer without referencing anything about her (for example a light guess-or-choose question). If there is almost nothing on the profile, do the same.
 - reply: answer what she said in the context of the whole chat. If she asked a question, answer it with a little personality, then hand it back.
@@ -225,6 +244,41 @@ function normalizeReplies(replies: BetaResult["replies"]): BetaResult["replies"]
 }
 
 // ─────────────────────────────────────────────────────────
+// Onboarding persona -> prompt guidance
+// ─────────────────────────────────────────────────────────
+const COMM_GUIDE: Record<string, string> = {
+  direct: "Direct and confident: shorter, clear, assertive; names a plan; no hedging.",
+  thoughtful: "Thoughtful but overthinks: give one clear low-risk recommendation, simple wording, make it easy to just send.",
+  playful: "Playful and casual: light banter, teasing that is warm, relaxed wording.",
+  quiet: "Quiet until he warms up: low-pressure, gentle and warm, easy to say, no big leaps.",
+};
+const FOCUS_GUIDE: Record<string, string> = {
+  openers: "He most wants help starting conversations.",
+  keeping: "He most wants help keeping conversations going, so give her an easy thing to answer.",
+  dates: "He most wants help moving to a date, so lean toward a concrete plan when the chat supports it.",
+  confidence: "He often does not know what to say, so keep the read short and the reasoning simple.",
+};
+const COMM_LABEL: Record<string, string> = {
+  direct: "Direct", thoughtful: "Thoughtful", playful: "Playful", quiet: "Quiet",
+};
+
+function personaBlock(p: BetaInput["persona"]): { text: string; label: string } | null {
+  if (!p) return null;
+  const lines: string[] = [];
+  if (p.commStyle && COMM_GUIDE[p.commStyle]) lines.push(`Communication style: ${COMM_GUIDE[p.commStyle]}`);
+  if (p.focus && FOCUS_GUIDE[p.focus]) lines.push(FOCUS_GUIDE[p.focus]);
+  if (p.vibes?.length) lines.push(`His vibe / interests: ${p.vibes.slice(0, 5).join(", ")}.`);
+  if (lines.length === 0) return null;
+  const label = [
+    p.commStyle ? COMM_LABEL[p.commStyle] : null,
+    p.vibes?.length ? p.vibes.slice(0, 2).map((v) => v[0].toUpperCase() + v.slice(1)).join(", ") : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return { text: lines.join("\n"), label };
+}
+
+// ─────────────────────────────────────────────────────────
 // Public entry point
 // ─────────────────────────────────────────────────────────
 export async function runBetaPipeline(input: BetaInput): Promise<BetaResult> {
@@ -237,6 +291,9 @@ export async function runBetaPipeline(input: BetaInput): Promise<BetaResult> {
         `User chose the "${input.requestedMode === "opener" ? "Write an opener" : "Reply to her"}" tab.`,
         input.history?.length ? `Conversation so far (from earlier in this session):\n${historyToText(input.history)}` : "",
         input.hint ? `Correction from Jack: ${input.hint}` : "",
+        input.firstMover && input.firstMover !== "auto"
+          ? `Jack says ${input.firstMover === "she" ? "SHE messaged first" : "HE messaged first"} in this conversation.`
+          : "",
         input.text?.trim() ? `Jack's text input:\n${input.text.trim()}` : "",
         hasImage ? `${input.images!.length} screenshot(s) attached.` : "",
         !input.text?.trim() && !hasImage ? "Nothing was sent (empty box)." : "",
@@ -277,6 +334,8 @@ export async function runBetaPipeline(input: BetaInput): Promise<BetaResult> {
     };
   }
 
+  const persona = personaBlock(input.persona);
+
   // ── Step 4: pull the coaching ──
   let chunks: Awaited<ReturnType<typeof retrieveRelevantChunks>> = [];
   try {
@@ -307,6 +366,9 @@ export async function runBetaPipeline(input: BetaInput): Promise<BetaResult> {
     u.profile_details?.length ? `SPECIFIC DETAILS TO USE: ${u.profile_details.join("; ")}` : "",
     u.mode === "fix_my_text" ? `HIS DRAFT: ${u.his_draft}` : "",
     input.hint ? `Correction from Jack: ${input.hint}` : "",
+    `WHO MESSAGED FIRST: ${input.firstMover === "she" ? "she did" : input.firstMover === "me" ? "he did" : "unknown (work it out)"}`,
+    persona ? `USER STYLE:\n${persona.text}` : "",
+    input.aboutMe?.trim() ? `ABOUT HIM (his words): ${input.aboutMe.trim()}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -341,6 +403,11 @@ export async function runBetaPipeline(input: BetaInput): Promise<BetaResult> {
       similarity: Number(c.similarity.toFixed(3)),
     })),
     mode_note: u.mode_note || undefined,
+    context_request:
+      u.mode === "opener" && !hasImage && !(u.profile_details?.length > 0)
+        ? "For an opener that is specific to her, add a screenshot of her profile (and yours if you like), or tell me one thing about her."
+        : undefined,
+    style_label: persona?.label || undefined,
     understanding: u,
   };
 }
