@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "crypto";
 import { waitUntil } from "@vercel/functions";
 import { and, gte, sql, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { betaRequests, userPersonas } from "@/lib/schema";
+import { betaRequests, userPersonas } from "@/lib/Schema";
 import { getAuthenticatedUserId } from "@/lib/auth";
 import { runBetaPipeline, LimitError, type BetaImage, type BetaPersona, type HistoryTurn } from "@/lib/beta/pipeline";
 
