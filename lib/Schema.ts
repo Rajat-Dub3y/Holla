@@ -230,6 +230,7 @@ export const ragSources = pgTable("rag_sources", {
 
 export const ragChunks = pgTable("rag_chunks", {
   id: uuid("id").defaultRandom().primaryKey(),
+  situations: text("situations").array(),
   sourceId: uuid("source_id").notNull().references(() => ragSources.id, { onDelete: "cascade" }),
   coachName: varchar("coach_name", { length: 128 }).notNull(), // denormalized for fast filtering
   chunkText: text("chunk_text").notNull(),

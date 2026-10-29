@@ -8,7 +8,22 @@ const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY })
 const EMBEDDING_MODEL = "gemini-embedding-001";
 const EMBEDDING_DIMENSIONS = 768;
 
+// Small in-memory cache: short inputs like "hey" or "lol" repeat constantly, and
+// a cache hit saves a whole network call (~300-500 ms). Per server instance.
+const EMBED_CACHE = new Map<string, number[]>();
+const EMBED_CACHE_MAX = 300;
+
 export async function embedText(text: string): Promise<number[]> {
+  const key = text.trim().toLowerCase();
+  const hit = EMBED_CACHE.get(key);
+  if (hit) return hit;
+  const values = await embedTextUncached(text);
+  if (EMBED_CACHE.size >= EMBED_CACHE_MAX) EMBED_CACHE.delete(EMBED_CACHE.keys().next().value as string);
+  EMBED_CACHE.set(key, values);
+  return values;
+}
+
+async function embedTextUncached(text: string): Promise<number[]> {
   const response = await ai.models.embedContent({
     model: EMBEDDING_MODEL,
     contents: text,

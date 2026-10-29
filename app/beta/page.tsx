@@ -81,6 +81,8 @@ export default function BetaPage() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [history, setHistory] = useState<HistoryTurn[]>([]);
   const [loading, setLoading] = useState(false);
+  // Shown while the reply is still being written (streamed from the server).
+  const [partial, setPartial] = useState<{ her_message?: string; mode?: string; read?: string } | null>(null);
   const [votes, setVotes] = useState<Record<string, 'up' | 'down'>>({});
   const [copied, setCopied] = useState<string | null>(null);
   const [firstMover, setFirstMover] = useState<'auto' | 'she' | 'me'>('auto');
@@ -117,7 +119,7 @@ export default function BetaPage() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages, loading]);
+  }, [messages, loading, partial]);
 
   // Grow the text box with its content
   useEffect(() => {
@@ -178,9 +180,38 @@ export default function BetaPage() {
           aboutMe: aboutMe.trim() || undefined,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Something went wrong. Please try again.');
-      const result = data as Result;
+      let result: Result;
+      const isStream = (res.headers.get('content-type') ?? '').includes('ndjson');
+      if (!isStream) {
+        // Validation / rate-limit errors come back as plain JSON.
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? 'Something went wrong. Please try again.');
+        result = data as Result;
+      } else {
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        let final: Result | null = null;
+        const handle = (line: string) => {
+          if (!line.trim()) return;
+          const ev = JSON.parse(line);
+          if (ev.type === 'understood') setPartial((p) => ({ ...p, her_message: ev.her_message, mode: ev.mode }));
+          else if (ev.type === 'read') setPartial((p) => ({ ...p, read: ev.text }));
+          else if (ev.type === 'error') throw new Error(ev.error);
+          else if (ev.type === 'final') final = ev as Result;
+        };
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop() ?? '';
+          lines.forEach(handle);
+        }
+        handle(buf);
+        if (!final) throw new Error('Something went wrong. Please try again.');
+        result = final;
+      }
 
       setMessages((m) => [...m, { id: nextId(), kind: 'holla', result }]);
 
@@ -195,6 +226,7 @@ export default function BetaPage() {
       ]);
     } finally {
       setLoading(false);
+      setPartial(null);
     }
   };
 
@@ -386,11 +418,31 @@ export default function BetaPage() {
           })}
 
           {loading && (
-            <div className="flex justify-start">
-              <div className="flex gap-1 rounded-2xl rounded-tl-sm bg-white px-4 py-3 shadow-sm" aria-label="Reading">
-                <span className="lp-dot h-1.5 w-1.5 rounded-full bg-mutedtext" />
-                <span className="lp-dot h-1.5 w-1.5 rounded-full bg-mutedtext" />
-                <span className="lp-dot h-1.5 w-1.5 rounded-full bg-mutedtext" />
+            <div className="space-y-3">
+              {partial?.her_message && (
+                <div>
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">
+                    {partial.mode === 'opener' ? 'Her profile, as I read it' : 'Her message, as I read it'}
+                  </p>
+                  <div className="mt-1 max-w-[90%] rounded-2xl rounded-tl-sm bg-white px-4 py-3 text-sm text-charcoal shadow-sm">
+                    {partial.her_message}
+                  </div>
+                </div>
+              )}
+              {partial?.read && (
+                <div className="rounded-lg border-l-2 border-coral bg-beige-50 px-3 py-2.5">
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-coral">
+                    {partial.mode === 'fix_my_text' ? 'What I changed' : partial.mode === 'opener' ? 'What to lead with' : "What she's saying"}
+                  </span>
+                  <p className="mt-1 text-sm leading-relaxed text-charcoal">{partial.read}</p>
+                </div>
+              )}
+              <div className="flex justify-start">
+                <div className="flex gap-1 rounded-2xl rounded-tl-sm bg-white px-4 py-3 shadow-sm" aria-label="Reading">
+                  <span className="lp-dot h-1.5 w-1.5 rounded-full bg-mutedtext" />
+                  <span className="lp-dot h-1.5 w-1.5 rounded-full bg-mutedtext" />
+                  <span className="lp-dot h-1.5 w-1.5 rounded-full bg-mutedtext" />
+                </div>
               </div>
             </div>
           )}

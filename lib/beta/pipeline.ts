@@ -1,14 +1,23 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { retrieveRelevantChunks } from "@/lib/rag/retrieve";
+import { retrieveRelevantChunks, fetchCandidatePool, rankPool, type CandidatePool } from "@/lib/rag/retrieve";
+import { tagsForUnderstanding } from "@/lib/rag/situations";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY });
-const MODEL = "gemini-2.5-flash-lite";
+// Same id the latency test confirmed works. Override with BETA_MODEL in .env.local if you change it.
+const MODEL = process.env.BETA_MODEL ?? "gemini-3.5-flash-lite";
 
 // ─────────────────────────────────────────────────────────
 // Types (match Part 4 of the beta brief)
 // ─────────────────────────────────────────────────────────
 export type Mode = "opener" | "reply" | "follow_up" | "fix_my_text";
 export type Style = "playful" | "curious" | "assertive" | "warm";
+
+/** Progress events, so the page can show text before the whole reply is done. */
+export type StreamEvent =
+  | { type: "understood"; her_message: string; mode: Mode; mode_note: string }
+  | { type: "read"; text: string };
+
+export type PipelineHooks = { onEvent?: (e: StreamEvent) => void };
 
 export type BetaImage = { mimeType: string; data: string }; // base64, no data: prefix
 export type HistoryTurn = { sender: "her" | "him"; text: string };
@@ -26,8 +35,23 @@ export type BetaInput = {
   /** Free text the user chose to share about himself (job, city, hobbies). */
   aboutMe?: string;
   /** From onboarding (signed-in users only). */
-  persona?: { vibes: string[]; commStyle?: string | null; focus?: string | null };
+  persona?: BetaPersona | undefined | Promise<BetaPersona | undefined>;
+  /**
+   * Rate-limit check running in parallel with Step 1 so it adds no wait.
+   * The pipeline waits for it before showing anything, and stops if it rejects.
+   */
+  gate?: Promise<void>;
 };
+
+export type BetaPersona = { vibes: string[]; commStyle?: string | null; focus?: string | null };
+
+/** Thrown through `gate` when the user is over a limit. The message is shown to them. */
+export class LimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LimitError";
+  }
+}
 
 type Understanding = {
   input_type: "screenshot" | "her_text" | "jack_describing" | "chat_log" | "jack_draft" | "profile";
@@ -58,13 +82,15 @@ export type BetaResult = {
   read: string;
   replies: Array<{ style: Style; recommended: boolean; text: string }>;
   next_move: string;
-  retrieved_sources: Array<{ id: string; coach: string; similarity: number }>;
+  retrieved_sources: Array<{ id: string; coach: string; similarity: number; tags?: string[] }>;
   mode_note?: string;
   clarify?: { question: string; options: string[] };
   /** Opener mode with nothing to work from: asks for context. */
   context_request?: string;
   /** e.g. "Direct · Social, Funny" when the user's onboarding style was used. */
   style_label?: string;
+  /** Where the time went, in ms. Logged and shown in the debug view. */
+  timings?: { understand_ms: number; retrieval_wait_ms: number; write_ms: number; speculative_retrieval: boolean };
   /** Step-1 output, logged for debugging. Never contains screenshots. */
   understanding: Understanding;
 };
@@ -196,6 +222,8 @@ BY MODE
 
 const WRITE_SCHEMA = {
   type: Type.OBJECT,
+  // "read" first, so it can be streamed to the user while the replies are still being written.
+  propertyOrdering: ["read", "replies", "next_move"],
   properties: {
     read: { type: Type.STRING },
     replies: {
@@ -230,6 +258,35 @@ function safeJson<T>(text: string | undefined, label: string): T {
   }
 }
 
+/** Pulls the (possibly unfinished) "read" string out of partial JSON as it streams in. */
+function extractPartialRead(acc: string): string {
+  const m = acc.match(/"read"\s*:\s*"/);
+  if (!m || m.index === undefined) return "";
+  let out = "";
+  let i = m.index + m[0].length;
+  while (i < acc.length) {
+    const ch = acc[i];
+    if (ch === '"') break;
+    if (ch === "\\") {
+      const next = acc[i + 1];
+      if (next === undefined) break; // escape not finished yet
+      if (next === "u") {
+        const hex = acc.slice(i + 2, i + 6);
+        if (hex.length < 4) break;
+        out += String.fromCharCode(parseInt(hex, 16));
+        i += 6;
+        continue;
+      }
+      out += next === "n" ? "\n" : next === "t" ? " " : next;
+      i += 2;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out.trim();
+}
+
 /** Ensures exactly one recommended reply and at most three replies. */
 function normalizeReplies(replies: BetaResult["replies"]): BetaResult["replies"] {
   const cleaned = (replies ?? [])
@@ -262,7 +319,7 @@ const COMM_LABEL: Record<string, string> = {
   direct: "Direct", thoughtful: "Thoughtful", playful: "Playful", quiet: "Quiet",
 };
 
-function personaBlock(p: BetaInput["persona"]): { text: string; label: string } | null {
+function personaBlock(p: BetaPersona | undefined): { text: string; label: string } | null {
   if (!p) return null;
   const lines: string[] = [];
   if (p.commStyle && COMM_GUIDE[p.commStyle]) lines.push(`Communication style: ${COMM_GUIDE[p.commStyle]}`);
@@ -281,7 +338,7 @@ function personaBlock(p: BetaInput["persona"]): { text: string; label: string } 
 // ─────────────────────────────────────────────────────────
 // Public entry point
 // ─────────────────────────────────────────────────────────
-export async function runBetaPipeline(input: BetaInput): Promise<BetaResult> {
+export async function runBetaPipeline(input: BetaInput, hooks: PipelineHooks = {}): Promise<BetaResult> {
   const hasImage = (input.images?.length ?? 0) > 0;
 
   // ── Step 1: understand ──
@@ -304,6 +361,25 @@ export async function runBetaPipeline(input: BetaInput): Promise<BetaResult> {
     ...(input.images ?? []).map((img) => ({ inlineData: { mimeType: img.mimeType, data: img.data } })),
   ];
 
+  // Speed: for typed text, start the knowledge-base search NOW, in parallel with
+  // Step 1, using the raw message. Step 1 then only decides the situation tags,
+  // and the re-rank happens in memory. (Screenshots have no text to search with
+  // yet, so they use the slower sequential path below.)
+  const rawText = input.text?.trim() ?? "";
+  let poolPromise: Promise<CandidatePool | null> | null = null;
+  if (rawText && !hasImage) {
+    const recent = (input.history ?? []).slice(-3).map((t) => `${t.sender === "her" ? "Her" : "Him"}: ${t.text}`).join(" / ");
+    const specQuery =
+      input.requestedMode === "opener"
+        ? `First message to a match on a dating app. ${rawText}`
+        : `${recent ? recent + " / " : ""}Her: ${rawText}`;
+    poolPromise = fetchCandidatePool(specQuery.slice(0, 600), 6).catch((err) => {
+      console.error("[beta] speculative retrieval failed:", err);
+      return null;
+    });
+  }
+
+  const t0 = Date.now();
   const understandRes = await ai.models.generateContent({
     model: MODEL,
     contents: [{ role: "user", parts }],
@@ -315,6 +391,7 @@ export async function runBetaPipeline(input: BetaInput): Promise<BetaResult> {
     },
   });
   const u = safeJson<Understanding>(understandRes.text, "understanding");
+  const understandMs = Date.now() - t0;
 
   // Unsure who is who: ask one quick tap question instead of guessing.
   if (u.needs_clarification && u.clarification_question && u.clarification_options?.length) {
@@ -334,19 +411,32 @@ export async function runBetaPipeline(input: BetaInput): Promise<BetaResult> {
     };
   }
 
-  const persona = personaBlock(input.persona);
+  // The limit check ran alongside Step 1; stop here if the user is over a limit.
+  if (input.gate) await input.gate;
+
+  // Show her message (as Holla read it) straight away; the rest follows.
+  hooks.onEvent?.({ type: "understood", her_message: u.her_message, mode: u.mode, mode_note: u.mode_note || "" });
+
+  const persona = personaBlock(await input.persona);
 
   // ── Step 4: pull the coaching ──
+  const tRet = Date.now();
   let chunks: Awaited<ReturnType<typeof retrieveRelevantChunks>> = [];
+  const speculative = !!poolPromise;
   try {
-    chunks = await retrieveRelevantChunks(u.retrieval_query || u.her_message || "dating opener", 6);
+    const situations = tagsForUnderstanding(u);
+    const pool = poolPromise ? await poolPromise : null;
+    chunks = pool
+      ? rankPool(pool, 6, 0.5, { situations })
+      : await retrieveRelevantChunks(u.retrieval_query || u.her_message || "dating opener", 6, 0.5, { situations });
   } catch (err) {
     // Never block the reply on retrieval (e.g. embedding quota). Logged in the debug fields.
     console.error("[beta] retrieval failed, continuing without it:", err);
   }
+  const retrievalWaitMs = Date.now() - tRet;
 
   const material = chunks.length
-    ? chunks.map((c, i) => `(${i + 1}) ${c.chunkText}`).join("\n\n")
+    ? chunks.slice(0, 5).map((c, i) => `(${i + 1}) ${c.chunkText.slice(0, 700)}`).join("\n\n")
     : "(no coaching material matched; use general good judgement)";
 
   // ── Step 5-6: write ──
@@ -373,7 +463,8 @@ export async function runBetaPipeline(input: BetaInput): Promise<BetaResult> {
     .filter(Boolean)
     .join("\n\n");
 
-  const writeRes = await ai.models.generateContent({
+  const tWrite = Date.now();
+  const writeStream = await ai.models.generateContentStream({
     model: MODEL,
     contents: [{ role: "user", parts: [{ text: writePrompt }] }],
     config: {
@@ -383,8 +474,19 @@ export async function runBetaPipeline(input: BetaInput): Promise<BetaResult> {
       temperature: 0.8,
     },
   });
-  const w = safeJson<{ read: string; replies: BetaResult["replies"]; next_move: string }>(writeRes.text, "reply");
+  let acc = "";
+  let lastRead = "";
+  for await (const part of writeStream) {
+    acc += part.text ?? "";
+    const partial = extractPartialRead(acc);
+    if (partial && partial !== lastRead) {
+      lastRead = partial;
+      hooks.onEvent?.({ type: "read", text: partial });
+    }
+  }
+  const w = safeJson<{ read: string; replies: BetaResult["replies"]; next_move: string }>(acc, "reply");
 
+  const writeMs = Date.now() - tWrite;
   const replies = normalizeReplies(w.replies);
   if (replies.length === 0) throw new Error("The model did not return any replies.");
 
@@ -401,6 +503,7 @@ export async function runBetaPipeline(input: BetaInput): Promise<BetaResult> {
       id: c.id,
       coach: c.coachName,
       similarity: Number(c.similarity.toFixed(3)),
+      tags: c.situations ?? undefined,
     })),
     mode_note: u.mode_note || undefined,
     context_request:
@@ -408,6 +511,7 @@ export async function runBetaPipeline(input: BetaInput): Promise<BetaResult> {
         ? "For an opener that is specific to her, add a screenshot of her profile (and yours if you like), or tell me one thing about her."
         : undefined,
     style_label: persona?.label || undefined,
+    timings: { understand_ms: understandMs, retrieval_wait_ms: retrievalWaitMs, write_ms: writeMs, speculative_retrieval: speculative },
     understanding: u,
   };
 }
