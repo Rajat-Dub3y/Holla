@@ -5,6 +5,7 @@ import { ArrowUp, Check, Copy, Paperclip, Plus, ThumbsDown, ThumbsUp, X } from '
 import { BRAND } from '@/lib/brand';
 import { cn } from '@/lib/utils';
 import { auth } from '@/lib/firebase-client';
+import { InsightBlock } from '@/components/beta/insight-block';
 import '../landing.css'; // typing-dots + pop-in animations
 
 // ─────────────────────────────────────────────────────────
@@ -48,7 +49,7 @@ type Attachment = { mimeType: string; data: string; preview: string };
 type HistoryTurn = { sender: 'her' | 'him'; text: string };
 type Msg =
   | { id: number; kind: 'user'; text: string; previews: string[] }
-  | { id: number; kind: 'holla'; result: Result }
+  | { id: number; kind: 'holla'; result: Result; history?: HistoryTurn[] }
   | { id: number; kind: 'error'; text: string };
 
 const STYLE_LABEL: Record<Style, string> = {
@@ -213,7 +214,7 @@ export default function BetaPage() {
         result = final;
       }
 
-      setMessages((m) => [...m, { id: nextId(), kind: 'holla', result }]);
+      setMessages((m) => [...m, { id: nextId(), kind: 'holla', result, history: currentHistory }]);
 
       // Keep the conversation in context for her next message.
       if (!result.clarify && result.her_message && result.mode !== 'opener' && result.mode !== 'fix_my_text') {
@@ -405,6 +406,7 @@ export default function BetaPage() {
               <ResultCard
                 key={m.id}
                 result={m.result}
+                history={m.history ?? []}
                 copied={copied}
                 votes={votes}
                 onCopy={copyReply}
@@ -555,6 +557,7 @@ export default function BetaPage() {
 
 function ResultCard({
   result,
+  history,
   copied,
   votes,
   onCopy,
@@ -565,6 +568,7 @@ function ResultCard({
   disabled,
 }: {
   result: Result;
+  history: HistoryTurn[];
   copied: string | null;
   votes: Record<string, 'up' | 'down'>;
   onCopy: (key: string, text: string) => void;
@@ -647,12 +651,19 @@ function ResultCard({
 
       {/* 2. What she's saying */}
       {result.read && (
-        <div className="rounded-lg border-l-2 border-coral bg-beige-50 px-3 py-2.5">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-coral">
-            {result.mode === 'fix_my_text' ? 'What I changed' : result.mode === 'opener' ? 'What to lead with' : "What she's saying"}
-          </span>
-          <p className="mt-1 text-sm leading-relaxed text-charcoal">{result.read}</p>
-        </div>
+        <InsightBlock
+          kind="read"
+          insight={result.read}
+          context={{ her_message: result.her_message, mode: result.mode, stage: result.stage }}
+          history={history}
+        >
+          <div className="rounded-lg border-l-2 border-coral bg-beige-50 py-2.5 pl-3 pr-10">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-coral">
+              {result.mode === 'fix_my_text' ? 'What I changed' : result.mode === 'opener' ? 'What to lead with' : "What she's saying"}
+            </span>
+            <p className="mt-1 text-sm leading-relaxed text-charcoal">{result.read}</p>
+          </div>
+        </InsightBlock>
       )}
 
       {/* 3. Recommended */}
@@ -691,10 +702,17 @@ function ResultCard({
 
       {/* 5. Next move */}
       {result.next_move && (
-        <p className="text-sm text-mutedtext">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-coral">Next move </span>
-          {result.next_move}
-        </p>
+        <InsightBlock
+          kind="next_move"
+          insight={result.next_move}
+          context={{ her_message: result.her_message, mode: result.mode, stage: result.stage }}
+          history={history}
+        >
+          <p className="pr-10 text-sm text-mutedtext">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-coral">Next move </span>
+            {result.next_move}
+          </p>
+        </InsightBlock>
       )}
 
       {/* Team-only debug (needs ?debug=KEY on the URL and a matching BETA_DEBUG_KEY) */}

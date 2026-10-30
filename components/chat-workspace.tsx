@@ -13,6 +13,7 @@ import { messageToChatMessages, threadToConversation, type MessageRow, type Thre
 import { useMe } from '@/lib/use-me';
 import type { ChatMessage, Conversation } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { InsightBlock } from '@/components/beta/insight-block';
 
 interface ThreadListResponse { threads: ThreadRow[] }
 interface ThreadDetailResponse { thread: ThreadRow; messages: MessageRow[] }
@@ -243,18 +244,36 @@ function ConversationPanel({ id, thread, detail, loading, conversation, credits,
   return <>
     <div className="flex items-center justify-between border-b border-beige-200 bg-cream px-4 py-3 md:px-6"><div className="flex items-center gap-3"><button onClick={onBack} className="text-mutedtext hover:text-charcoal md:hidden" aria-label="Back to conversations"><ArrowLeft className="h-5 w-5" /></button><div className="flex h-9 w-9 items-center justify-center rounded-full bg-beige-300 font-serif text-sm font-bold text-beige-900">{conversation.matchAvatar}</div><div><p className="font-semibold text-charcoal">{conversation.matchName}</p><p className="font-mono text-xs text-mutedtext">{conversation.lastActivity}</p></div></div><div className="flex items-center gap-2"><span className={cn('rounded-full px-2.5 py-1 font-mono text-xs', conversation.stage === 'active' ? 'bg-sage/15 text-sage-dark' : conversation.stage === 'new' ? 'bg-coral/15 text-coral' : 'bg-beige-200 text-mutedtext')}>{conversation.stage === 'active' ? 'Active' : conversation.stage === 'new' ? 'New' : 'Gone quiet'}</span>{thread.status !== 'archived' && <button onClick={onArchive} title="Archive conversation" className="flex h-8 w-8 items-center justify-center rounded-lg text-mutedtext hover:bg-beige-100 hover:text-charcoal"><Archive className="h-4 w-4" /></button>}</div></div>
 
-    <div className="flex-1 overflow-y-auto bg-cream/50 px-4 py-4 md:px-6"><div className="mx-auto max-w-2xl space-y-3">{loading && <div className="h-20 animate-pulse rounded-xl bg-beige-100" />}{!loading && chatMessages.map((message) => <MessageRenderer key={message.id} msg={message} />)}{!loading && !exchangeMessages.length && thread.whoOpened === 'him' && <div className="rounded-xl border border-beige-200 bg-beige-50 p-4 text-sm text-mutedtext">Opener suggestions are coming soon.</div>}{showCreditCap && <CreditCapState dailyResetAt={resetAt ?? dailyResetAt} />}</div></div>
+    <div className="flex-1 overflow-y-auto bg-cream/50 px-4 py-4 md:px-6"><div className="mx-auto max-w-2xl space-y-3">{loading && <div className="h-20 animate-pulse rounded-xl bg-beige-100" />}{!loading && chatMessages.map((message, index) => <MessageRenderer key={message.id} msg={message} insightContext={insightContextFor(chatMessages, index)} />)}{!loading && !exchangeMessages.length && thread.whoOpened === 'him' && <div className="rounded-xl border border-beige-200 bg-beige-50 p-4 text-sm text-mutedtext">Opener suggestions are coming soon.</div>}{showCreditCap && <CreditCapState dailyResetAt={resetAt ?? dailyResetAt} />}</div></div>
 
     <div className="border-t border-beige-200 bg-cream px-4 py-3 md:px-6"><div className="mx-auto max-w-2xl">{hisTurn ? <form onSubmit={sendDraft}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Write your reply..." rows={3} className="w-full resize-y rounded-xl border border-beige-300 bg-white px-4 py-3 text-sm text-charcoal outline-none focus:border-coral" />{feedback && <div className="mt-2 rounded-lg border-l-2 border-coral bg-beige-50 px-3 py-2 text-xs leading-relaxed text-charcoal">{feedback}</div>}<div className="mt-2 flex items-center justify-between gap-2"><button type="button" onClick={checkDraft} disabled={busy || !draft.trim()} className="rounded-lg border border-beige-300 px-3 py-2 text-xs font-semibold text-charcoal disabled:opacity-50">Check my draft</button><button disabled={busy || !draft.trim()} className="inline-flex items-center gap-2 rounded-lg bg-coral px-4 py-2 text-sm font-semibold text-cream disabled:opacity-50">Send <Send className="h-4 w-4" /></button></div></form> : <>{mode === 'text' ? <form onSubmit={submitText}><textarea value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="Paste her message..." rows={3} className="w-full resize-y rounded-xl border border-beige-300 bg-white px-4 py-3 text-sm text-charcoal outline-none focus:border-coral" /><div className="mt-2 flex justify-end gap-2"><button type="button" onClick={() => setMode(null)} className="rounded-lg border border-beige-300 px-4 py-2 text-sm text-charcoal">Cancel</button><button disabled={busy || !messageText.trim()} className="rounded-lg bg-coral px-4 py-2 text-sm font-semibold text-cream disabled:opacity-50">{busy ? 'Analyzing...' : 'Analyze'}</button></div></form> : <div className="rounded-xl border border-beige-300 bg-white p-4"><p className="mb-3 text-sm font-semibold text-charcoal">Has she replied yet?</p><div className="flex flex-col gap-2 sm:flex-row"><button onClick={() => setMode('text')} className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-beige-300 px-4 py-2.5 text-sm text-mutedtext hover:bg-beige-50"><ClipboardPaste className="h-4 w-4" />Paste her text</button><label className="flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg border border-beige-300 px-4 py-2.5 text-sm text-mutedtext hover:bg-beige-50"><Camera className="h-4 w-4" />{busy ? 'Analyzing...' : 'Upload screenshot'}<input type="file" accept="image/*" className="sr-only" disabled={busy} onChange={(event) => submitScreenshot(event.target.files?.[0])} /></label></div></div>}<div className="mt-2 flex items-center justify-between"><p className="font-mono text-xs text-mutedtext">{dailyResetAt ? `Resets in ${formatDistanceToNow(new Date(dailyResetAt))} · ` : ''}{Number.isFinite(credits) ? `${credits} analyses left` : 'Unlimited analyses'}</p><Link href="/learn" className="font-mono text-xs text-coral hover:underline">Practice instead →</Link></div></>}</div></div>
   </>;
 }
 
-function MessageRenderer({ msg }: { msg: ChatMessage }) {
+type InsightContext = {
+  context: { her_message: string; mode: string; stage: string };
+  history: Array<{ sender: 'her' | 'him'; text: string }>;
+};
+
+/** What the AI should see when the user asks about the insight at `index`: the chat up to that point, nothing else. */
+function insightContextFor(messages: ChatMessage[], index: number): InsightContext {
+  const history: InsightContext['history'] = [];
+  for (const m of messages.slice(0, index)) {
+    if ((m.role === 'her' || m.role === 'him') && m.text) history.push({ sender: m.role, text: m.text });
+  }
+  const lastHer = [...history].reverse().find((t) => t.sender === 'her');
+  return { context: { her_message: lastHer?.text ?? '', mode: 'reply', stage: '' }, history };
+}
+
+function MessageRenderer({ msg, insightContext }: { msg: ChatMessage; insightContext?: InsightContext }) {
   if (msg.role === 'her' || msg.role === 'him') {
     const isHer = msg.role === 'her';
     return <div className={cn('flex', isHer ? 'justify-start' : 'justify-end')}><div className="max-w-[80%]"><div className={cn('rounded-2xl px-4 py-3 text-sm text-charcoal shadow-sm', isHer ? 'rounded-tl-sm bg-white' : 'rounded-tr-sm bg-beige-400')}>{msg.text}</div><p className={cn('mt-1 font-mono text-[10px] text-mutedtext', isHer ? 'pl-1' : 'pr-1 text-right')}>{msg.timestamp}</p></div></div>;
   }
-  if (msg.role === 'coach') return <div className="flex justify-start pl-2"><div className="max-w-[85%]"><div className="rounded-lg border-l-2 border-coral bg-beige-50 px-3 py-2.5"><div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-coral">{msg.annotation?.type === 'signal' ? 'Signal' : msg.annotation?.type === 'suggestion' ? 'Next move' : 'Insight'}</div><p className="text-xs leading-relaxed text-charcoal">{msg.text}</p></div>{msg.annotation?.text && <p className="mt-1 pl-1 font-mono text-[10px] text-mutedtext">{msg.annotation.text}</p>}</div></div>;
+  if (msg.role === 'coach') {
+    const card = <div className="rounded-lg border-l-2 border-coral bg-beige-50 py-2.5 pl-3 pr-10"><div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-coral">{msg.annotation?.type === 'signal' ? 'Signal' : msg.annotation?.type === 'suggestion' ? 'Next move' : 'Insight'}</div><p className="text-xs leading-relaxed text-charcoal">{msg.text}</p></div>;
+    return <div className="flex justify-start pl-2"><div className="max-w-[85%]">{insightContext && msg.text ? <InsightBlock kind={msg.annotation?.type === 'suggestion' ? 'next_move' : 'read'} insight={msg.text} context={insightContext.context} history={insightContext.history}>{card}</InsightBlock> : card}{msg.annotation?.text && <p className="mt-1 pl-1 font-mono text-[10px] text-mutedtext">{msg.annotation.text}</p>}</div></div>;
+  }
   return <div className="flex justify-center py-2"><div className="flex items-center gap-2 rounded-full bg-beige-100 px-3 py-1.5"><Zap className="h-3 w-3 text-coral" /><span className="font-mono text-xs text-mutedtext">{msg.text}</span></div></div>;
 }
 
