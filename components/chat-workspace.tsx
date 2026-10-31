@@ -36,7 +36,7 @@ function ChatScreen() {
   const [creating, setCreating] = useState(false);
 
   const { data: listData, error: listError, isLoading: listLoading, mutate: mutateList } = useSWR<ThreadListResponse>('/api/threads', apiFetch);
-  const threads = listData?.threads ?? [];
+  const threads = useMemo(() => listData?.threads ?? [], [listData]);
   const visibleThreads = useMemo(() => threads.filter((thread) => showArchived || thread.status !== 'archived'), [showArchived, threads]);
   const selectedThread = threads.find((thread) => thread.id === selectedId);
   const { data: detail, isLoading: detailLoading, mutate: mutateDetail } = useSWR<ThreadDetailResponse>(selectedId ? `/api/threads/${selectedId}` : null, apiFetch);

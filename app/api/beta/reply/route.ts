@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
     sessionId?: string;
     mode?: "reply" | "opener";
     text?: string;
+    from?: "her" | "draft";
     images?: BetaImage[];
     history?: HistoryTurn[];
     hint?: string;
@@ -49,6 +50,7 @@ export async function POST(req: NextRequest) {
   const text = (body.text ?? "").slice(0, MAX_TEXT);
   const images = (body.images ?? []).slice(0, MAX_IMAGES);
   const mode = body.mode === "opener" ? "opener" : "reply";
+  const textFrom = body.from === "draft" && mode === "reply" ? "him_draft" : "her";
   const sessionId = (body.sessionId ?? "anon").slice(0, 64);
   const hint = body.hint?.slice(0, 200);
   const firstMover = body.firstMover === "she" || body.firstMover === "me" ? body.firstMover : "auto";
@@ -151,7 +153,7 @@ export async function POST(req: NextRequest) {
       const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
       try {
         const result = await runBetaPipeline(
-          { requestedMode: mode, text, images, history, hint, firstMover, aboutMe, persona: personaPromise, gate },
+          { requestedMode: mode, text, textFrom, images, history, hint, firstMover, aboutMe, persona: personaPromise, gate },
           { onEvent: (e) => send(e) },
         );
         const latencyMs = Date.now() - started;

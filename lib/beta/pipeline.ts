@@ -26,6 +26,11 @@ export type BetaInput = {
   /** What the user picked on the tab. The AI may override it and says so. */
   requestedMode: "reply" | "opener";
   text?: string;
+  /**
+   * Who the typed text is from. "her" (default): her new message, the one to
+   * answer. "him_draft": a message he is planning to send, wants feedback on.
+   */
+  textFrom?: "her" | "him_draft";
   images?: BetaImage[];
   history?: HistoryTurn[];
   /** A one-tap correction, e.g. "The grey bubbles are her". */
@@ -109,6 +114,10 @@ const UNDERSTAND_SYSTEM = `You read dating-app conversations for a coach. You do
 - text: decide if it is: her message on its own (her_text); Jack describing what she said ("she just said hey what do I say") (jack_describing); a pasted chat with both sides (chat_log); or Jack's own draft he wants improved (jack_draft).
 - NEVER write her real name or any real names. Use "her" or leave names out.
 - If you are genuinely unsure who sent which bubble, or who sent the last message, set needs_clarification true, ask ONE short question, and give 2 short options Jack can tap (e.g. "The grey bubbles are her" / "The blue bubbles are her"). Never guess silently when it would flip the answer.
+
+EXPLICIT LABELS (these win over everything else):
+- "NEW MESSAGE FROM HER (answer this one only)": her_message is exactly that text, mode is reply, last_sender is her. The conversation so far is context only. Never answer an earlier message.
+- "HIS DRAFT (not sent yet)": mode is fix_my_text, input_type is jack_draft, his_draft is exactly that text. her_message is her most recent message from the conversation so far (or "" if none).
 
 TEXT DEFAULTS (important):
 - On the "Reply to her" tab, plain pasted/typed text is HER message by default, even a lone greeting: "hey", "hi", "heyy", "hi how are you", "lol". Never treat a bare greeting as Jack's own message.
@@ -215,7 +224,7 @@ BY MODE
 - opener: never "hey", "hi how are you" or "you're beautiful". Use something specific from her profile. If there are NO profile details at all (nothing was uploaded or described), do not pretend there are: say in one line in "read" that you have not seen her profile yet and that uploading a screenshot gets a more specific opener, then write openers that give her an easy, fun choice to answer without referencing anything about her (for example a light guess-or-choose question). If there is almost nothing on the profile, do the same.
 - reply: answer what she said in the context of the whole chat. If she asked a question, answer it with a little personality, then hand it back.
 - follow_up: she has not answered. Recommend waiting OR one light, no-guilt follow-up (never "?" or "guess you're not interested"). If he already sent one follow-up, tell him to move on and make the replies a graceful, low-key option or say so in the read.
-- fix_my_text: the first reply (recommended) is his draft improved. "read" is ONE line explaining what you changed and why. The other two are different angles on the same message.
+- fix_my_text: he has NOT sent this yet and wants feedback. The first reply (recommended) is his draft improved. "read" is ONE line of honest feedback: what works and what you changed and why. If the draft is already good, say so and change it only slightly. The other two are different angles on the same message. Judge it against her last message in the chat, never against a different message.
 - If the chat has had a few good back-and-forths and she is engaged (asks questions, longer replies, emoji), the next step is a date: make the recommended reply suggest a specific day and place or two options.
 - If she is vague about meeting ("maybe sometime", "busy"), keep it light, offer one easy option, do not push.
 - If her replies keep getting shorter, switch to a fresh fun topic or go straight for the date.`;
@@ -351,7 +360,13 @@ export async function runBetaPipeline(input: BetaInput, hooks: PipelineHooks = {
         input.firstMover && input.firstMover !== "auto"
           ? `Jack says ${input.firstMover === "she" ? "SHE messaged first" : "HE messaged first"} in this conversation.`
           : "",
-        input.text?.trim() ? `Jack's text input:\n${input.text.trim()}` : "",
+        input.text?.trim()
+          ? input.textFrom === "him_draft"
+            ? `HIS DRAFT (not sent yet):\n${input.text.trim()}`
+            : input.requestedMode === "reply"
+              ? `NEW MESSAGE FROM HER (answer this one only):\n${input.text.trim()}`
+              : `Jack's text input:\n${input.text.trim()}`
+          : "",
         hasImage ? `${input.images!.length} screenshot(s) attached.` : "",
         !input.text?.trim() && !hasImage ? "Nothing was sent (empty box)." : "",
       ]
@@ -392,6 +407,24 @@ export async function runBetaPipeline(input: BetaInput, hooks: PipelineHooks = {
   });
   const u = safeJson<Understanding>(understandRes.text, "understanding");
   const understandMs = Date.now() - t0;
+
+  // We know who wrote the typed text, so don't let the model re-guess it.
+  const typed = input.text?.trim() ?? "";
+  if (typed && !hasImage) {
+    if (input.textFrom === "him_draft") {
+      u.mode = "fix_my_text";
+      u.input_type = "jack_draft";
+      u.his_draft = typed;
+      if (!u.her_message) {
+        const lastHer = [...(input.history ?? [])].reverse().find((t) => t.sender === "her");
+        u.her_message = lastHer?.text ?? "";
+      }
+    } else if (input.requestedMode === "reply" && u.input_type !== "chat_log" && u.mode !== "opener") {
+      u.her_message = typed.slice(0, 600);
+      u.last_sender = "her";
+      if (u.mode === "fix_my_text") u.mode = "reply";
+    }
+  }
 
   // Unsure who is who: ask one quick tap question instead of guessing.
   if (u.needs_clarification && u.clarification_question && u.clarification_options?.length) {

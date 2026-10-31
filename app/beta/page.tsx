@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { ArrowUp, Check, Copy, Paperclip, Plus, ThumbsDown, ThumbsUp, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowUp, Check, Copy, Paperclip, PencilLine, Plus, Send, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { BRAND } from '@/lib/brand';
 import { cn } from '@/lib/utils';
 import { auth } from '@/lib/firebase-client';
@@ -25,7 +25,24 @@ const ABOUT_PLACEHOLDER = 'e.g. I climb, cook badly, live in Austin, work in des
 const OPENER_LINE =
   'Looking for an opener? Upload a screenshot of her profile — and yours if you like — and Holla will write one with personality.';
 
+const MAX_IMAGES = 3;
+
+// Shrinks screenshots before upload (fast, and stays under the request size limit).
+async function toCompressedJpeg(file: File): Promise<Attachment> {
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const w = Math.round(bmp.width * scale);
+  const h = Math.round(bmp.height * scale);
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  canvas.getContext('2d')!.drawImage(bmp, 0, 0, w, h);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+  return { mimeType: 'image/jpeg', data: dataUrl.split(',')[1], preview: dataUrl };
+}
+
 type Tab = 'reply' | 'opener';
+type Role = 'her' | 'me';
 type Style = 'playful' | 'curious' | 'assertive' | 'warm';
 
 type Reply = { style: Style; recommended: boolean; text: string };
@@ -47,9 +64,18 @@ type Result = {
 
 type Attachment = { mimeType: string; data: string; preview: string };
 type HistoryTurn = { sender: 'her' | 'him'; text: string };
-type Msg =
-  | { id: number; kind: 'user'; text: string; previews: string[] }
-  | { id: number; kind: 'holla'; result: Result; history?: HistoryTurn[] }
+
+/**
+ * The thread is the source of truth. Her messages and yours are real chat
+ * bubbles; Holla's suggestions sit under them. The history sent to the AI is
+ * built from these items, so what you see is what the AI knows.
+ */
+type Item =
+  | { id: number; kind: 'her'; text: string; previews: string[]; readText?: string }
+  | { id: number; kind: 'profile'; text: string; previews: string[] }
+  | { id: number; kind: 'him'; text: string; fromKey?: string }
+  | { id: number; kind: 'draft'; text: string }
+  | { id: number; kind: 'holla'; result: Result; history: HistoryTurn[] }
   | { id: number; kind: 'error'; text: string };
 
 const STYLE_LABEL: Record<Style, string> = {
@@ -59,31 +85,30 @@ const STYLE_LABEL: Record<Style, string> = {
   warm: 'Warm',
 };
 
-const MAX_IMAGES = 3;
+const DRAFT_PLACEHOLDER = "Type the message you're planning to send…";
 
-// Shrinks screenshots before upload (fast, and stays under the request size limit).
-async function toCompressedJpeg(file: File): Promise<Attachment> {
-  const bmp = await createImageBitmap(file);
-  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
-  const w = Math.round(bmp.width * scale);
-  const h = Math.round(bmp.height * scale);
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  canvas.getContext('2d')!.drawImage(bmp, 0, 0, w, h);
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
-  return { mimeType: 'image/jpeg', data: dataUrl.split(',')[1], preview: dataUrl };
+function itemsToHistory(items: Item[]): HistoryTurn[] {
+  const out: HistoryTurn[] = [];
+  for (const it of items) {
+    if (it.kind === 'her') {
+      const t = (it.text || it.readText || '').trim();
+      if (t) out.push({ sender: 'her', text: t });
+    } else if (it.kind === 'him' && it.text.trim()) {
+      out.push({ sender: 'him', text: it.text.trim() });
+    }
+  }
+  return out;
 }
 
 export default function BetaPage() {
   const [tab, setTab] = useState<Tab>('reply');
+  const [role, setRole] = useState<Role>('her');
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [messages, setMessages] = useState<Msg[]>([]);
-  const [history, setHistory] = useState<HistoryTurn[]>([]);
+  const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false);
   // Shown while the reply is still being written (streamed from the server).
-  const [partial, setPartial] = useState<{ her_message?: string; mode?: string; read?: string } | null>(null);
+  const [partial, setPartial] = useState<{ her_message?: string; mode?: string; read?: string; screenshot?: boolean } | null>(null);
   const [votes, setVotes] = useState<Record<string, 'up' | 'down'>>({});
   const [copied, setCopied] = useState<string | null>(null);
   const [firstMover, setFirstMover] = useState<'auto' | 'she' | 'me'>('auto');
@@ -92,11 +117,14 @@ export default function BetaPage() {
 
   const sessionId = useRef('anon');
   const debugKey = useRef<string | null>(null);
-  const lastInput = useRef<{ text: string; images: Attachment[] } | null>(null);
+  const lastRun = useRef<{ text: string; images: Attachment[]; from: 'her' | 'draft'; history: HistoryTurn[]; tab: Tab; itemId: number } | null>(null);
   const idCounter = useRef(0);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const history = useMemo(() => itemsToHistory(items), [items]);
+  const asRole: Role = tab === 'reply' ? role : 'her';
 
   useEffect(() => {
     try {
@@ -120,7 +148,7 @@ export default function BetaPage() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages, loading, partial]);
+  }, [items, loading, partial]);
 
   // Grow the text box with its content
   useEffect(() => {
@@ -140,11 +168,12 @@ export default function BetaPage() {
       const converted = await Promise.all(images.slice(0, room).map(toCompressedJpeg));
       setAttachments((prev) => [...prev, ...converted]);
     } catch {
-      setMessages((m) => [...m, { id: nextId(), kind: 'error', text: "Couldn't read that image. Try another screenshot." }]);
+      setItems((m) => [...m, { id: nextId(), kind: 'error', text: "Couldn't read that image. Try another screenshot." }]);
     }
   };
 
   const onPaste = (e: React.ClipboardEvent) => {
+    if (asRole === 'me') return; // drafts are text only
     const files = Array.from(e.clipboardData.files);
     if (files.some((f) => f.type.startsWith('image/'))) {
       e.preventDefault();
@@ -152,9 +181,13 @@ export default function BetaPage() {
     }
   };
 
-  const run = async (input: { text: string; images: Attachment[] }, hint?: string, currentHistory = history) => {
+  /** Asks the server. `history` is the thread BEFORE this message. */
+  const run = async (
+    input: { text: string; images: Attachment[]; from: 'her' | 'draft'; history: HistoryTurn[]; tab: Tab; itemId: number },
+    hint?: string
+  ) => {
     setLoading(true);
-    lastInput.current = input;
+    lastRun.current = input;
     try {
       // Signed-in users (who did onboarding) get their style applied server-side.
       let token: string | undefined;
@@ -172,12 +205,13 @@ export default function BetaPage() {
         },
         body: JSON.stringify({
           sessionId: sessionId.current,
-          mode: tab,
+          mode: input.tab,
+          from: input.from,
           text: input.text,
           images: input.images.map(({ mimeType, data }) => ({ mimeType, data })),
-          history: currentHistory,
+          history: input.history,
           hint,
-          firstMover: tab === 'reply' ? firstMover : 'auto',
+          firstMover: input.tab === 'reply' ? firstMover : 'auto',
           aboutMe: aboutMe.trim() || undefined,
         }),
       });
@@ -214,14 +248,22 @@ export default function BetaPage() {
         result = final;
       }
 
-      setMessages((m) => [...m, { id: nextId(), kind: 'holla', result, history: currentHistory }]);
-
-      // Keep the conversation in context for her next message.
-      if (!result.clarify && result.her_message && result.mode !== 'opener' && result.mode !== 'fix_my_text') {
-        setHistory((h) => [...h, { sender: 'her', text: result.her_message }]);
-      }
+      setItems((m) => {
+        let next = m;
+        // The thread bubble for her message: keep what the AI read from a screenshot,
+        // and turn a profile upload (or an AI mode switch to opener) into a profile card.
+        if (!result.clarify) {
+          next = next.map((it): Item => {
+            if (it.id !== input.itemId) return it;
+            if (it.kind === 'her' && result.mode === 'opener') return { id: it.id, kind: 'profile', text: it.text, previews: it.previews };
+            if (it.kind === 'her' && it.previews.length > 0 && !it.text) return { ...it, readText: result.her_message };
+            return it;
+          });
+        }
+        return [...next, { id: nextId(), kind: 'holla', result, history: input.history }];
+      });
     } catch (err) {
-      setMessages((m) => [
+      setItems((m) => [
         ...m,
         { id: nextId(), kind: 'error', text: err instanceof Error ? err.message : 'Something went wrong. Please try again.' },
       ]);
@@ -231,23 +273,56 @@ export default function BetaPage() {
     }
   };
 
-  const send = () => {
+  /** Her message (typed, pasted or screenshot) or, on the opener tab, her profile. */
+  const sendHers = () => {
     if (loading) return;
-    const input = { text: text.trim(), images: attachments };
-    if (!input.text && input.images.length === 0) return;
-    setMessages((m) => [
-      ...m,
-      { id: nextId(), kind: 'user', text: input.text, previews: input.images.map((i) => i.preview) },
-    ]);
+    const t = text.trim();
+    if (!t && attachments.length === 0) return;
+    const id = nextId();
+    const previews = attachments.map((a) => a.preview);
+    const snapshot = history; // thread before this message
+    setItems((m) => [...m, tab === 'opener' ? { id, kind: 'profile', text: t, previews } : { id, kind: 'her', text: t, previews }]);
+    const images = attachments;
     setText('');
     setAttachments([]);
-    void run(input);
+    setPartial(images.length > 0 ? { screenshot: true } : null);
+    void run({ text: t, images, from: 'her', history: snapshot, tab, itemId: id });
   };
 
+  /** Feedback on a message he is planning to send (nothing is added to the chat yet). */
+  const checkDraft = () => {
+    if (loading) return;
+    const t = text.trim();
+    if (!t) return;
+    const id = nextId();
+    const snapshot = history;
+    // One live draft at a time: a new check replaces the previous draft and its feedback.
+    setItems((m) => {
+      const lastDraft = [...m].reverse().find((x) => x.kind === 'draft');
+      const base = lastDraft ? m.slice(0, m.findIndex((x) => x.id === lastDraft.id)) : m;
+      return [...base, { id, kind: 'draft', text: t }];
+    });
+    void run({ text: t, images: [], from: 'draft', history: snapshot, tab: 'reply', itemId: id });
+  };
+
+  /** He sent it (his own words, or one of Holla's replies): it becomes a bubble on his side. */
+  const markSent = (sentText?: string, fromKey?: string) => {
+    const t = (sentText ?? text).trim();
+    if (!t) return;
+    setItems((m) => [
+      ...m.filter((x) => x.kind !== 'draft'), // sending clears the draft preview
+      { id: nextId(), kind: 'him', text: t, fromKey },
+    ]);
+    if (sentText === undefined) setText('');
+    setRole('her'); // next message is probably hers
+  };
+
+  const removeSent = (id: number) => setItems((m) => m.filter((x) => x.id !== id));
+
   const answerClarification = (option: string) => {
-    if (loading || !lastInput.current) return;
-    setMessages((m) => [...m, { id: nextId(), kind: 'user', text: option, previews: [] }]);
-    void run(lastInput.current, option);
+    if (loading || !lastRun.current) return;
+    setItems((m) => m.filter((x) => !(x.kind === 'holla' && x.result.clarify)));
+    void run(lastRun.current, option);
   };
 
   const copyReply = async (key: string, reply: string) => {
@@ -263,8 +338,17 @@ export default function BetaPage() {
     }
     setCopied(key);
     setTimeout(() => setCopied((c) => (c === key ? null : c)), 1500);
-    // Assume what he copies is what he sends: keeps the thread in context.
-    setHistory((h) => [...h, { sender: 'him', text: reply }]);
+    // Assume what he copies is what he sends. It shows as his bubble, and he can remove it.
+    setItems((m) => (m.some((x) => x.kind === 'him' && x.fromKey === key) ? m : [...m.filter((x) => x.kind !== 'draft'), { id: nextId(), kind: 'him', text: reply, fromKey: key }]));
+    setRole('her');
+  };
+
+  /** Puts a suggested reply in the box so he can edit it and check it before sending. */
+  const useReply = (reply: string) => {
+    setTab('reply');
+    setRole('me');
+    setText(reply);
+    setTimeout(() => boxRef.current?.focus(), 0);
   };
 
   const vote = async (result: Result, index: number, v: 'up' | 'down') => {
@@ -283,14 +367,18 @@ export default function BetaPage() {
   };
 
   const newChat = () => {
-    setMessages([]);
-    setHistory([]);
+    setItems([]);
     setText('');
     setAttachments([]);
-    lastInput.current = null;
+    setRole('her');
+    lastRun.current = null;
   };
 
-  const empty = messages.length === 0;
+  const empty = items.length === 0;
+  const primary = () => (asRole === 'me' ? checkDraft() : sendHers());
+
+  // The newest suggestion card is the only one that needs its action buttons live.
+  const lastHollaId = [...items].reverse().find((x) => x.kind === 'holla')?.id;
 
   return (
     <div className="min-h-screen bg-cream">
@@ -347,69 +435,125 @@ export default function BetaPage() {
 
         {/* Mode-specific context */}
         {tab === 'reply' ? (
-          <div className="mx-auto mt-4 flex flex-wrap items-center justify-center gap-2 text-xs text-mutedtext">
-            <span>Who messaged first?</span>
-            {([
-              ['auto', 'Not sure'],
-              ['she', 'She did'],
-              ['me', 'I did'],
-            ] as const).map(([id, label]) => (
-              <button
-                key={id}
-                onClick={() => setFirstMover(id)}
-                aria-pressed={firstMover === id}
-                className={cn(
-                  'rounded-full border px-3 py-1 font-medium transition-colors',
-                  firstMover === id
-                    ? 'border-coral bg-coral/10 text-charcoal'
-                    : 'border-beige-300 hover:border-beige-400'
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          empty && (
+            <div className="mx-auto mt-4 flex flex-wrap items-center justify-center gap-2 text-xs text-mutedtext">
+              <span>Who messaged first?</span>
+              {([
+                ['auto', 'Not sure'],
+                ['she', 'She did'],
+                ['me', 'I did'],
+              ] as const).map(([id, label]) => (
+                <button
+                  key={id}
+                  onClick={() => setFirstMover(id)}
+                  aria-pressed={firstMover === id}
+                  className={cn(
+                    'rounded-full border px-3 py-1 font-medium transition-colors',
+                    firstMover === id
+                      ? 'border-coral bg-coral/10 text-charcoal'
+                      : 'border-beige-300 hover:border-beige-400'
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )
         ) : (
           <p className="mx-auto mt-4 max-w-md text-center text-xs text-mutedtext">
             No messages yet? I&apos;ll write the first one from her profile.
           </p>
         )}
 
-        {/* Thread */}
-        <div className="mt-6 flex-1 space-y-5" aria-live="polite">
-          {messages.map((m) => {
-            if (m.kind === 'user') {
+        {/* The conversation */}
+        <div className="mt-6 flex-1 space-y-4" aria-live="polite">
+          {items.map((it) => {
+            if (it.kind === 'her') {
               return (
-                <div key={m.id} className="flex justify-end">
-                  <div className="max-w-[85%] space-y-2 rounded-2xl rounded-tr-sm bg-beige-400 px-4 py-3 text-sm text-charcoal shadow-sm">
-                    {m.previews.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {m.previews.map((p, i) => (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img key={i} src={p} alt="Uploaded screenshot" className="h-24 rounded-lg object-cover" />
-                        ))}
-                      </div>
+                <div key={it.id} className="flex justify-start">
+                  <div className="max-w-[80%]">
+                    <p className="mb-1 pl-1 font-mono text-[10px] uppercase tracking-wider text-mutedtext">Her</p>
+                    <div className="space-y-2 rounded-2xl rounded-tl-sm bg-white px-4 py-3 text-sm text-charcoal shadow-sm">
+                      {it.previews.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {it.previews.map((p, i) => (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img key={i} src={p} alt="Uploaded screenshot" className="h-24 rounded-lg object-cover" />
+                          ))}
+                        </div>
+                      )}
+                      {it.text && <p className="whitespace-pre-wrap">{it.text}</p>}
+                    </div>
+                    {it.previews.length > 0 && it.readText && (
+                      <p className="mt-1 pl-1 text-xs text-mutedtext">I read her last message as: &ldquo;{it.readText}&rdquo;</p>
                     )}
-                    {m.text && <p className="whitespace-pre-wrap">{m.text}</p>}
                   </div>
                 </div>
               );
             }
-            if (m.kind === 'error') {
+            if (it.kind === 'profile') {
               return (
-                <p key={m.id} className="rounded-xl border border-coral/40 bg-coral/5 px-4 py-3 text-sm text-charcoal">
-                  {m.text}
+                <div key={it.id} className="rounded-xl border border-beige-300 bg-beige-50 px-4 py-3 text-sm text-charcoal">
+                  <p className="mb-1 font-mono text-[10px] uppercase tracking-wider text-mutedtext">Her profile</p>
+                  {it.previews.length > 0 && (
+                    <div className="mb-2 flex flex-wrap gap-2">
+                      {it.previews.map((p, i) => (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img key={i} src={p} alt="Uploaded profile screenshot" className="h-24 rounded-lg object-cover" />
+                      ))}
+                    </div>
+                  )}
+                  {it.text && <p className="whitespace-pre-wrap">{it.text}</p>}
+                </div>
+              );
+            }
+            if (it.kind === 'him') {
+              return (
+                <div key={it.id} className="group flex justify-end">
+                  <div className="max-w-[80%]">
+                    <p className="mb-1 pr-1 text-right font-mono text-[10px] uppercase tracking-wider text-mutedtext">You</p>
+                    <div className="rounded-2xl rounded-tr-sm bg-beige-400 px-4 py-3 text-sm text-charcoal shadow-sm">
+                      <p className="whitespace-pre-wrap">{it.text}</p>
+                    </div>
+                    <button
+                      onClick={() => removeSent(it.id)}
+                      className="mt-1 block w-full pr-1 text-right text-[11px] text-mutedtext hover:text-coral"
+                    >
+                      Didn&apos;t send this
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+            if (it.kind === 'draft') {
+              return (
+                <div key={it.id} className="flex justify-end">
+                  <div className="max-w-[80%]">
+                    <p className="mb-1 pr-1 text-right font-mono text-[10px] uppercase tracking-wider text-coral">Your draft · not sent</p>
+                    <div className="rounded-2xl rounded-tr-sm border border-dashed border-coral/60 bg-white px-4 py-3 text-sm text-charcoal">
+                      <p className="whitespace-pre-wrap">{it.text}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+            if (it.kind === 'error') {
+              return (
+                <p key={it.id} className="rounded-xl border border-coral/40 bg-coral/5 px-4 py-3 text-sm text-charcoal">
+                  {it.text}
                 </p>
               );
             }
             return (
               <ResultCard
-                key={m.id}
-                result={m.result}
-                history={m.history ?? []}
+                key={it.id}
+                result={it.result}
+                history={it.history}
+                live={it.id === lastHollaId}
                 copied={copied}
                 votes={votes}
                 onCopy={copyReply}
+                onUse={useReply}
                 onVote={vote}
                 onClarify={answerClarification}
                 onUpload={() => fileInput.current?.click()}
@@ -420,27 +564,20 @@ export default function BetaPage() {
           })}
 
           {loading && (
-            <div className="space-y-3">
-              {partial?.her_message && (
-                <div>
-                  <p className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">
-                    {partial.mode === 'opener' ? 'Her profile, as I read it' : 'Her message, as I read it'}
-                  </p>
-                  <div className="mt-1 max-w-[90%] rounded-2xl rounded-tl-sm bg-white px-4 py-3 text-sm text-charcoal shadow-sm">
-                    {partial.her_message}
-                  </div>
-                </div>
+            <div className="space-y-2">
+              {partial?.screenshot && !partial.her_message && (
+                <p className="text-xs text-mutedtext">Reading your screenshot…</p>
               )}
               {partial?.read && (
                 <div className="rounded-lg border-l-2 border-coral bg-beige-50 px-3 py-2.5">
                   <span className="font-mono text-[10px] uppercase tracking-wider text-coral">
-                    {partial.mode === 'fix_my_text' ? 'What I changed' : partial.mode === 'opener' ? 'What to lead with' : "What she's saying"}
+                    {partial.mode === 'fix_my_text' ? 'On your draft' : partial.mode === 'opener' ? 'What to lead with' : "What she's saying"}
                   </span>
                   <p className="mt-1 text-sm leading-relaxed text-charcoal">{partial.read}</p>
                 </div>
               )}
               <div className="flex justify-start">
-                <div className="flex gap-1 rounded-2xl rounded-tl-sm bg-white px-4 py-3 shadow-sm" aria-label="Reading">
+                <div className="flex gap-1 rounded-2xl rounded-tl-sm bg-white px-4 py-3 shadow-sm" aria-label="Thinking">
                   <span className="lp-dot h-1.5 w-1.5 rounded-full bg-mutedtext" />
                   <span className="lp-dot h-1.5 w-1.5 rounded-full bg-mutedtext" />
                   <span className="lp-dot h-1.5 w-1.5 rounded-full bg-mutedtext" />
@@ -451,8 +588,36 @@ export default function BetaPage() {
           <div ref={bottomRef} />
         </div>
 
-        {/* Input box */}
+        {/* Composer */}
         <div className="sticky bottom-0 mt-6 bg-cream pb-2 pt-2">
+          {/* Whose message is this? */}
+          {tab === 'reply' && (
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div role="tablist" aria-label="Whose message" className="flex w-fit rounded-full border border-beige-300 bg-beige-50 p-0.5 text-xs">
+                {([
+                  ['her', 'Her message'],
+                  ['me', 'My message'],
+                ] as const).map(([id, label]) => (
+                  <button
+                    key={id}
+                    role="tab"
+                    aria-selected={role === id}
+                    onClick={() => setRole(id)}
+                    className={cn(
+                      'rounded-full px-3.5 py-1.5 font-semibold transition-colors',
+                      role === id ? 'bg-charcoal text-cream' : 'text-mutedtext hover:text-charcoal'
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="hidden text-right text-[11px] text-mutedtext sm:block">
+                {role === 'her' ? 'Paste what she sent' : 'Check it before you send it'}
+              </p>
+            </div>
+          )}
+
           {showAbout ? (
             <div className="mb-2 rounded-xl border border-beige-300 bg-white p-2">
               <label className="px-1 font-mono text-[10px] uppercase tracking-wider text-mutedtext">
@@ -475,13 +640,15 @@ export default function BetaPage() {
               />
             </div>
           ) : (
-            <button
-              onClick={() => setShowAbout(true)}
-              className="mb-2 inline-flex items-center gap-1 text-xs font-medium text-mutedtext hover:text-coral"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              {aboutMe.trim() ? 'Edit what I know about you' : 'Add something about you (optional)'}
-            </button>
+            empty && (
+              <button
+                onClick={() => setShowAbout(true)}
+                className="mb-2 inline-flex items-center gap-1 text-xs font-medium text-mutedtext hover:text-coral"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {aboutMe.trim() ? 'Edit what I know about you' : 'Add something about you (optional)'}
+              </button>
+            )
           )}
 
           {attachments.length > 0 && (
@@ -502,7 +669,12 @@ export default function BetaPage() {
             </div>
           )}
 
-          <div className="flex items-end gap-2 rounded-2xl border border-beige-300 bg-white p-2 shadow-sm focus-within:border-coral">
+          <div
+            className={cn(
+              'flex items-end gap-2 rounded-2xl border bg-white p-2 shadow-sm focus-within:border-coral',
+              asRole === 'me' ? 'border-dashed border-coral/60' : 'border-beige-300'
+            )}
+          >
             <textarea
               ref={boxRef}
               value={text}
@@ -511,12 +683,12 @@ export default function BetaPage() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
-                  send();
+                  primary();
                 }
               }}
               rows={1}
-              placeholder={tab === 'opener' ? OPENER_PLACEHOLDER : PLACEHOLDER}
-              aria-label="Her message, a screenshot, or your draft"
+              placeholder={asRole === 'me' ? DRAFT_PLACEHOLDER : tab === 'opener' ? OPENER_PLACEHOLDER : PLACEHOLDER}
+              aria-label={asRole === 'me' ? 'The message you plan to send' : 'Her message, a screenshot, or her profile'}
               className="max-h-[200px] flex-1 resize-none bg-transparent px-2 py-2 text-sm text-charcoal outline-none placeholder:text-mutedtext"
             />
             <input
@@ -528,27 +700,55 @@ export default function BetaPage() {
               onChange={(e) => {
                 void addFiles(Array.from(e.target.files ?? []));
                 e.target.value = '';
+                if (role === 'me') setRole('her');
               }}
             />
-            <button
-              onClick={() => fileInput.current?.click()}
-              aria-label="Upload a screenshot"
-              disabled={attachments.length >= MAX_IMAGES}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-mutedtext transition-colors hover:bg-beige-100 hover:text-charcoal disabled:opacity-40"
-            >
-              <Paperclip className="h-5 w-5" />
-            </button>
-            <button
-              onClick={send}
-              disabled={loading || (!text.trim() && attachments.length === 0)}
-              aria-label="Send"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-coral text-cream transition-colors hover:bg-coral-dark disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <ArrowUp className="h-5 w-5" />
-            </button>
+            {asRole === 'her' && (
+              <>
+                <button
+                  onClick={() => fileInput.current?.click()}
+                  aria-label="Upload a screenshot"
+                  disabled={attachments.length >= MAX_IMAGES}
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-mutedtext transition-colors hover:bg-beige-100 hover:text-charcoal disabled:opacity-40"
+                >
+                  <Paperclip className="h-5 w-5" />
+                </button>
+                <button
+                  onClick={sendHers}
+                  disabled={loading || (!text.trim() && attachments.length === 0)}
+                  aria-label="Send"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-coral text-cream transition-colors hover:bg-coral-dark disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <ArrowUp className="h-5 w-5" />
+                </button>
+              </>
+            )}
           </div>
 
-          <p className="mt-3 text-center text-xs leading-relaxed text-mutedtext">{tab === 'opener' ? OPENER_TAB_LINE : OPENER_LINE}</p>
+          {asRole === 'me' && (
+            <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+              <button
+                onClick={() => markSent()}
+                disabled={!text.trim()}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-beige-300 bg-white px-4 py-2 text-sm font-semibold text-charcoal transition-colors hover:bg-beige-50 disabled:opacity-40"
+              >
+                <Send className="h-4 w-4" />
+                I sent this
+              </button>
+              <button
+                onClick={checkDraft}
+                disabled={loading || !text.trim()}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-coral px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-coral-dark disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Sparkles className="h-4 w-4" />
+                Check it first
+              </button>
+            </div>
+          )}
+
+          {empty && (
+            <p className="mt-3 text-center text-xs leading-relaxed text-mutedtext">{tab === 'opener' ? OPENER_TAB_LINE : OPENER_LINE}</p>
+          )}
         </div>
       </div>
     </div>
@@ -558,9 +758,11 @@ export default function BetaPage() {
 function ResultCard({
   result,
   history,
+  live,
   copied,
   votes,
   onCopy,
+  onUse,
   onVote,
   onClarify,
   onUpload,
@@ -569,9 +771,11 @@ function ResultCard({
 }: {
   result: Result;
   history: HistoryTurn[];
+  live: boolean;
   copied: string | null;
   votes: Record<string, 'up' | 'down'>;
   onCopy: (key: string, text: string) => void;
+  onUse: (text: string) => void;
   onVote: (result: Result, index: number, v: 'up' | 'down') => void;
   onClarify: (option: string) => void;
   onUpload: () => void;
@@ -604,20 +808,24 @@ function ResultCard({
   }
 
   const [recommended, ...alternatives] = result.replies;
-  const isOpener = result.mode === 'opener';
+  const isDraftFeedback = result.mode === 'fix_my_text';
+  const insightContext = { her_message: result.her_message, mode: result.mode, stage: result.stage };
 
   return (
-    <div className="lp-pop space-y-3">
+    <div className="lp-pop ml-0 space-y-2.5 rounded-2xl border border-beige-200 bg-beige-50/70 p-3 md:ml-6">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-coral">
+          {isDraftFeedback ? 'Holla · on your draft' : 'Holla'}
+        </span>
+        {result.style_label && (
+          <span className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">In your style · {result.style_label}</span>
+        )}
+      </div>
       {result.mode_note && <p className="font-mono text-xs text-coral">{result.mode_note}</p>}
-      {result.style_label && (
-        <p className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">
-          Written in your style · {result.style_label}
-        </p>
-      )}
 
       {/* Opener with nothing to work from: ask for context */}
       {result.context_request && (
-        <div className="rounded-xl border-l-2 border-coral bg-beige-50 p-4">
+        <div className="rounded-xl border-l-2 border-coral bg-white p-3">
           <p className="font-mono text-[10px] uppercase tracking-wider text-coral">Want it sharper?</p>
           <p className="mt-1 text-sm text-charcoal">{result.context_request}</p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -637,39 +845,10 @@ function ResultCard({
         </div>
       )}
 
-      {/* 1. Her message, as Holla read it */}
-      {result.her_message && (
-        <div>
-          <p className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">
-            {isOpener ? 'Her profile, as I read it' : 'Her message, as I read it'}
-          </p>
-          <div className="mt-1 max-w-[90%] rounded-2xl rounded-tl-sm bg-white px-4 py-3 text-sm text-charcoal shadow-sm">
-            {result.her_message}
-          </div>
-        </div>
-      )}
-
-      {/* 2. What she's saying */}
-      {result.read && (
-        <InsightBlock
-          kind="read"
-          insight={result.read}
-          context={{ her_message: result.her_message, mode: result.mode, stage: result.stage }}
-          history={history}
-        >
-          <div className="rounded-lg border-l-2 border-coral bg-beige-50 py-2.5 pl-3 pr-10">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-coral">
-              {result.mode === 'fix_my_text' ? 'What I changed' : result.mode === 'opener' ? 'What to lead with' : "What she's saying"}
-            </span>
-            <p className="mt-1 text-sm leading-relaxed text-charcoal">{result.read}</p>
-          </div>
-        </InsightBlock>
-      )}
-
-      {/* 3. Recommended */}
+      {/* The suggestion */}
       {recommended && (
         <ReplyBlock
-          label="Recommended"
+          label={isDraftFeedback ? 'Better version' : 'Suggested reply'}
           reply={recommended}
           index={0}
           highlight
@@ -677,38 +856,50 @@ function ResultCard({
           copied={copied}
           votes={votes}
           onCopy={onCopy}
+          onUse={live ? onUse : undefined}
           onVote={onVote}
         />
       )}
 
-      {/* 4. Or try */}
-      {alternatives.length > 0 && (
-        <div className="space-y-2">
-          <p className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">Or try</p>
-          {alternatives.map((r, i) => (
-            <ReplyBlock
-              key={i}
-              reply={r}
-              index={i + 1}
-              result={result}
-              copied={copied}
-              votes={votes}
-              onCopy={onCopy}
-              onVote={onVote}
-            />
-          ))}
-        </div>
+      {/* Why, with the "ask about this" button */}
+      {result.read && (
+        <InsightBlock kind="read" insight={result.read} context={insightContext} history={history}>
+          <div className="rounded-lg bg-white/70 py-2 pl-3 pr-10">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-coral">
+              {isDraftFeedback ? 'What I changed' : result.mode === 'opener' ? 'What to lead with' : "What she's saying"}
+            </span>
+            <p className="mt-0.5 text-[13px] leading-relaxed text-charcoal">{result.read}</p>
+          </div>
+        </InsightBlock>
       )}
 
-      {/* 5. Next move */}
-      {result.next_move && (
-        <InsightBlock
-          kind="next_move"
-          insight={result.next_move}
-          context={{ her_message: result.her_message, mode: result.mode, stage: result.stage }}
-          history={history}
-        >
-          <p className="pr-10 text-sm text-mutedtext">
+      {/* More options, tucked away so the chat stays the focus */}
+      {alternatives.length > 0 && (
+        <details className="group">
+          <summary className="cursor-pointer select-none font-mono text-[10px] uppercase tracking-wider text-mutedtext hover:text-coral">
+            {alternatives.length} other {alternatives.length === 1 ? 'option' : 'options'}
+          </summary>
+          <div className="mt-2 space-y-2">
+            {alternatives.map((r, i) => (
+              <ReplyBlock
+                key={i}
+                reply={r}
+                index={i + 1}
+                result={result}
+                copied={copied}
+                votes={votes}
+                onCopy={onCopy}
+                onUse={live ? onUse : undefined}
+                onVote={onVote}
+              />
+            ))}
+          </div>
+        </details>
+      )}
+
+      {result.next_move && !isDraftFeedback && (
+        <InsightBlock kind="next_move" insight={result.next_move} context={insightContext} history={history}>
+          <p className="py-1 pr-10 text-[13px] text-mutedtext">
             <span className="font-mono text-[10px] uppercase tracking-wider text-coral">Next move </span>
             {result.next_move}
           </p>
@@ -743,6 +934,7 @@ function ReplyBlock({
   copied,
   votes,
   onCopy,
+  onUse,
   onVote,
 }: {
   label?: string;
@@ -753,6 +945,7 @@ function ReplyBlock({
   copied: string | null;
   votes: Record<string, 'up' | 'down'>;
   onCopy: (key: string, text: string) => void;
+  onUse?: (text: string) => void;
   onVote: (result: Result, index: number, v: 'up' | 'down') => void;
 }) {
   const key = `${result.requestId ?? 'x'}-${index}`;
@@ -760,7 +953,7 @@ function ReplyBlock({
   return (
     <div
       className={cn(
-        'rounded-xl border p-4',
+        'rounded-xl border p-3',
         highlight ? 'border-coral bg-white shadow-sm' : 'border-beige-200 bg-white'
       )}
     >
@@ -794,14 +987,25 @@ function ReplyBlock({
           </button>
         </div>
       </div>
-      <p className="mt-2 whitespace-pre-wrap text-[15px] leading-relaxed text-charcoal">{reply.text}</p>
-      <button
-        onClick={() => onCopy(key, reply.text)}
-        className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-beige-300 px-3 py-1.5 text-xs font-semibold text-charcoal transition-colors hover:bg-beige-50"
-      >
-        {copied === key ? <Check className="h-3.5 w-3.5 text-sage" /> : <Copy className="h-3.5 w-3.5" />}
-        {copied === key ? 'Copied' : 'Copy'}
-      </button>
+      <p className="mt-1.5 whitespace-pre-wrap text-[15px] leading-relaxed text-charcoal">{reply.text}</p>
+      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        {onUse && (
+          <button
+            onClick={() => onUse(reply.text)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-charcoal px-3 py-1.5 text-xs font-semibold text-cream transition-colors hover:bg-charcoal/90"
+          >
+            <PencilLine className="h-3.5 w-3.5" />
+            Edit &amp; use
+          </button>
+        )}
+        <button
+          onClick={() => onCopy(key, reply.text)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-beige-300 px-3 py-1.5 text-xs font-semibold text-charcoal transition-colors hover:bg-beige-50"
+        >
+          {copied === key ? <Check className="h-3.5 w-3.5 text-sage" /> : <Copy className="h-3.5 w-3.5" />}
+          {copied === key ? 'Copied · added to chat' : 'Copy & send'}
+        </button>
+      </div>
     </div>
   );
 }
