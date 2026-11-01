@@ -114,6 +114,11 @@ export async function POST(req: NextRequest) {
     }
   })();
   gate.catch(() => undefined); // avoid an unhandled-rejection warning if the pipeline fails first
+  // The database check can take a couple of seconds on a cold Neon connection, so the
+  // reply never waits for it: if it has not finished, the request goes ahead. Every
+  // request is logged and counted, so a user who is over the limit is stopped on the
+  // next request at the latest. A finished check that says "blocked" still blocks.
+  const gateNonBlocking: Promise<void> = Promise.race([gate, new Promise<void>((r) => setTimeout(r, 0))]);
 
   // Signed-in users get their onboarding style applied. Anonymous testers skip
   // this. Read with the verified token (never from the request body), and
@@ -153,7 +158,7 @@ export async function POST(req: NextRequest) {
       const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
       try {
         const result = await runBetaPipeline(
-          { requestedMode: mode, text, textFrom, images, history, hint, firstMover, aboutMe, persona: personaPromise, gate },
+          { requestedMode: mode, text, textFrom, images, history, hint, firstMover, aboutMe, persona: personaPromise, gate: gateNonBlocking },
           { onEvent: (e) => send(e) },
         );
         const latencyMs = Date.now() - started;
