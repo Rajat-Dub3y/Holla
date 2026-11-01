@@ -74,7 +74,6 @@ type Item =
   | { id: number; kind: 'her'; text: string; previews: string[]; readText?: string }
   | { id: number; kind: 'profile'; text: string; previews: string[] }
   | { id: number; kind: 'him'; text: string; fromKey?: string }
-  | { id: number; kind: 'draft'; text: string }
   | { id: number; kind: 'holla'; result: Result; history: HistoryTurn[] }
   | { id: number; kind: 'error'; text: string };
 
@@ -107,6 +106,10 @@ export default function BetaPage() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false);
+  // Draft check (Grammarly-style): lives under the text box, never in the chat thread.
+  const [checking, setChecking] = useState(false);
+  const [draftResult, setDraftResult] = useState<Result | null>(null);
+  const [draftError, setDraftError] = useState<string | null>(null);
   // Shown while the reply is still being written (streamed from the server).
   const [partial, setPartial] = useState<{ her_message?: string; mode?: string; read?: string; screenshot?: boolean } | null>(null);
   const [votes, setVotes] = useState<Record<string, 'up' | 'down'>>({});
@@ -186,7 +189,8 @@ export default function BetaPage() {
     input: { text: string; images: Attachment[]; from: 'her' | 'draft'; history: HistoryTurn[]; tab: Tab; itemId: number },
     hint?: string
   ) => {
-    setLoading(true);
+    if (input.from === 'draft') setChecking(true);
+    else setLoading(true);
     lastRun.current = input;
     try {
       // Signed-in users (who did onboarding) get their style applied server-side.
@@ -248,6 +252,12 @@ export default function BetaPage() {
         result = final;
       }
 
+      // A draft check never goes into the chat: it shows under the text box.
+      if (input.from === 'draft') {
+        if (!result.clarify) setDraftResult(result);
+        return;
+      }
+
       setItems((m) => {
         let next = m;
         // The thread bubble for her message: keep what the AI read from a screenshot,
@@ -263,12 +273,12 @@ export default function BetaPage() {
         return [...next, { id: nextId(), kind: 'holla', result, history: input.history }];
       });
     } catch (err) {
-      setItems((m) => [
-        ...m,
-        { id: nextId(), kind: 'error', text: err instanceof Error ? err.message : 'Something went wrong. Please try again.' },
-      ]);
+      const msg = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
+      if (input.from === 'draft') setDraftError(msg);
+      else setItems((m) => [...m, { id: nextId(), kind: 'error', text: msg }]);
     } finally {
       setLoading(false);
+      setChecking(false);
       setPartial(null);
     }
   };
@@ -289,30 +299,24 @@ export default function BetaPage() {
     void run({ text: t, images, from: 'her', history: snapshot, tab, itemId: id });
   };
 
-  /** Feedback on a message he is planning to send (nothing is added to the chat yet). */
+  /** Feedback on a message he is planning to send. Shown under the box; nothing is added to the chat. */
   const checkDraft = () => {
-    if (loading) return;
+    if (loading || checking) return;
     const t = text.trim();
     if (!t) return;
-    const id = nextId();
-    const snapshot = history;
-    // One live draft at a time: a new check replaces the previous draft and its feedback.
-    setItems((m) => {
-      const lastDraft = [...m].reverse().find((x) => x.kind === 'draft');
-      const base = lastDraft ? m.slice(0, m.findIndex((x) => x.id === lastDraft.id)) : m;
-      return [...base, { id, kind: 'draft', text: t }];
-    });
-    void run({ text: t, images: [], from: 'draft', history: snapshot, tab: 'reply', itemId: id });
+    setDraftResult(null);
+    setDraftError(null);
+    setPartial(null);
+    void run({ text: t, images: [], from: 'draft', history, tab: 'reply', itemId: 0 });
   };
 
   /** He sent it (his own words, or one of Holla's replies): it becomes a bubble on his side. */
   const markSent = (sentText?: string, fromKey?: string) => {
     const t = (sentText ?? text).trim();
     if (!t) return;
-    setItems((m) => [
-      ...m.filter((x) => x.kind !== 'draft'), // sending clears the draft preview
-      { id: nextId(), kind: 'him', text: t, fromKey },
-    ]);
+    setItems((m) => [...m, { id: nextId(), kind: 'him', text: t, fromKey }]);
+    setDraftResult(null);
+    setDraftError(null);
     if (sentText === undefined) setText('');
     setRole('her'); // next message is probably hers
   };
@@ -339,7 +343,7 @@ export default function BetaPage() {
     setCopied(key);
     setTimeout(() => setCopied((c) => (c === key ? null : c)), 1500);
     // Assume what he copies is what he sends. It shows as his bubble, and he can remove it.
-    setItems((m) => (m.some((x) => x.kind === 'him' && x.fromKey === key) ? m : [...m.filter((x) => x.kind !== 'draft'), { id: nextId(), kind: 'him', text: reply, fromKey: key }]));
+    setItems((m) => (m.some((x) => x.kind === 'him' && x.fromKey === key) ? m : [...m, { id: nextId(), kind: 'him', text: reply, fromKey: key }]));
     setRole('her');
   };
 
@@ -347,6 +351,8 @@ export default function BetaPage() {
   const useReply = (reply: string) => {
     setTab('reply');
     setRole('me');
+    setDraftResult(null);
+    setDraftError(null);
     setText(reply);
     setTimeout(() => boxRef.current?.focus(), 0);
   };
@@ -368,6 +374,8 @@ export default function BetaPage() {
 
   const newChat = () => {
     setItems([]);
+    setDraftResult(null);
+    setDraftError(null);
     setText('');
     setAttachments([]);
     setRole('her');
@@ -473,7 +481,7 @@ export default function BetaPage() {
                 <div key={it.id} className="flex justify-start">
                   <div className="max-w-[80%]">
                     <p className="mb-1 pl-1 font-mono text-[10px] uppercase tracking-wider text-mutedtext">Her</p>
-                    <div className="space-y-2 rounded-2xl rounded-tl-sm bg-white px-4 py-3 text-sm text-charcoal shadow-sm">
+                    <div className="space-y-2 rounded-2xl rounded-tl-sm bg-white px-4 py-3 text-[15px] leading-relaxed text-charcoal shadow-sm">
                       {it.previews.length > 0 && (
                         <div className="flex flex-wrap gap-2">
                           {it.previews.map((p, i) => (
@@ -512,7 +520,7 @@ export default function BetaPage() {
                 <div key={it.id} className="group flex justify-end">
                   <div className="max-w-[80%]">
                     <p className="mb-1 pr-1 text-right font-mono text-[10px] uppercase tracking-wider text-mutedtext">You</p>
-                    <div className="rounded-2xl rounded-tr-sm bg-beige-400 px-4 py-3 text-sm text-charcoal shadow-sm">
+                    <div className="rounded-2xl rounded-tr-sm bg-beige-400 px-4 py-3 text-[15px] leading-relaxed text-charcoal shadow-sm">
                       <p className="whitespace-pre-wrap">{it.text}</p>
                     </div>
                     <button
@@ -521,18 +529,6 @@ export default function BetaPage() {
                     >
                       Didn&apos;t send this
                     </button>
-                  </div>
-                </div>
-              );
-            }
-            if (it.kind === 'draft') {
-              return (
-                <div key={it.id} className="flex justify-end">
-                  <div className="max-w-[80%]">
-                    <p className="mb-1 pr-1 text-right font-mono text-[10px] uppercase tracking-wider text-coral">Your draft · not sent</p>
-                    <div className="rounded-2xl rounded-tr-sm border border-dashed border-coral/60 bg-white px-4 py-3 text-sm text-charcoal">
-                      <p className="whitespace-pre-wrap">{it.text}</p>
-                    </div>
                   </div>
                 </div>
               );
@@ -678,7 +674,13 @@ export default function BetaPage() {
             <textarea
               ref={boxRef}
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => {
+                setText(e.target.value);
+                if (!e.target.value.trim()) {
+                  setDraftResult(null);
+                  setDraftError(null);
+                }
+              }}
               onPaste={onPaste}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -725,6 +727,26 @@ export default function BetaPage() {
             )}
           </div>
 
+          {asRole === 'me' && (checking || draftResult || draftError) && (
+            <DraftFeedback
+              checking={checking}
+              partialRead={partial?.read}
+              result={draftResult}
+              error={draftError}
+              votes={votes}
+              onVote={vote}
+              onUse={(t) => {
+                setText(t);
+                setDraftResult(null);
+                setTimeout(() => boxRef.current?.focus(), 0);
+              }}
+              onDismiss={() => {
+                setDraftResult(null);
+                setDraftError(null);
+              }}
+            />
+          )}
+
           {asRole === 'me' && (
             <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
               <button
@@ -737,11 +759,11 @@ export default function BetaPage() {
               </button>
               <button
                 onClick={checkDraft}
-                disabled={loading || !text.trim()}
+                disabled={loading || checking || !text.trim()}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-coral px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-coral-dark disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Sparkles className="h-4 w-4" />
-                Check it first
+                {checking ? 'Checking…' : 'Check it first'}
               </button>
             </div>
           )}
@@ -812,10 +834,10 @@ function ResultCard({
   const insightContext = { her_message: result.her_message, mode: result.mode, stage: result.stage };
 
   return (
-    <div className="lp-pop ml-0 space-y-2.5 rounded-2xl border border-beige-200 bg-beige-50/70 p-3 md:ml-6">
+    <div className="lp-pop ml-0 space-y-2 rounded-xl border border-beige-200/80 bg-beige-50/40 p-2.5 md:ml-6">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="font-mono text-[10px] uppercase tracking-wider text-coral">
-          {isDraftFeedback ? 'Holla · on your draft' : 'Holla'}
+        <span className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">
+          {isDraftFeedback ? 'Holla · on your draft' : 'Holla suggests'}
         </span>
         {result.style_label && (
           <span className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">In your style · {result.style_label}</span>
@@ -864,11 +886,11 @@ function ResultCard({
       {/* Why, with the "ask about this" button */}
       {result.read && (
         <InsightBlock kind="read" insight={result.read} context={insightContext} history={history}>
-          <div className="rounded-lg bg-white/70 py-2 pl-3 pr-10">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-coral">
+          <div className="rounded-lg py-1.5 pl-1 pr-10">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">
               {isDraftFeedback ? 'What I changed' : result.mode === 'opener' ? 'What to lead with' : "What she's saying"}
             </span>
-            <p className="mt-0.5 text-[13px] leading-relaxed text-charcoal">{result.read}</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-mutedtext">{result.read}</p>
           </div>
         </InsightBlock>
       )}
@@ -899,8 +921,8 @@ function ResultCard({
 
       {result.next_move && !isDraftFeedback && (
         <InsightBlock kind="next_move" insight={result.next_move} context={insightContext} history={history}>
-          <p className="py-1 pr-10 text-[13px] text-mutedtext">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-coral">Next move </span>
+          <p className="py-1 pl-1 pr-10 text-xs text-mutedtext">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">Next move </span>
             {result.next_move}
           </p>
         </InsightBlock>
@@ -953,12 +975,12 @@ function ReplyBlock({
   return (
     <div
       className={cn(
-        'rounded-xl border p-3',
-        highlight ? 'border-coral bg-white shadow-sm' : 'border-beige-200 bg-white'
+        'rounded-lg border p-2.5',
+        highlight ? 'border-beige-300 bg-white/80' : 'border-beige-200/80 bg-white/60'
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-[10px] uppercase tracking-wider text-coral">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">
           {label ? `${label} · ` : ''}
           {STYLE_LABEL[reply.style] ?? reply.style}
         </span>
@@ -972,7 +994,7 @@ function ReplyBlock({
               myVote === 'up' ? 'text-sage' : 'text-mutedtext'
             )}
           >
-            <ThumbsUp className="h-4 w-4" />
+            <ThumbsUp className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={() => onVote(result, index, 'down')}
@@ -983,29 +1005,168 @@ function ReplyBlock({
               myVote === 'down' ? 'text-coral' : 'text-mutedtext'
             )}
           >
-            <ThumbsDown className="h-4 w-4" />
+            <ThumbsDown className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
-      <p className="mt-1.5 whitespace-pre-wrap text-[15px] leading-relaxed text-charcoal">{reply.text}</p>
+      <p className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed text-charcoal/80">{reply.text}</p>
       <div className="mt-2.5 flex flex-wrap items-center gap-2">
         {onUse && (
           <button
             onClick={() => onUse(reply.text)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-charcoal px-3 py-1.5 text-xs font-semibold text-cream transition-colors hover:bg-charcoal/90"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-beige-300 bg-white px-2.5 py-1 text-xs font-medium text-charcoal transition-colors hover:border-coral"
           >
-            <PencilLine className="h-3.5 w-3.5" />
+            <PencilLine className="h-3 w-3" />
             Edit &amp; use
           </button>
         )}
         <button
           onClick={() => onCopy(key, reply.text)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-beige-300 px-3 py-1.5 text-xs font-semibold text-charcoal transition-colors hover:bg-beige-50"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-beige-300 px-2.5 py-1 text-xs font-medium text-mutedtext transition-colors hover:bg-beige-50 hover:text-charcoal"
         >
           {copied === key ? <Check className="h-3.5 w-3.5 text-sage" /> : <Copy className="h-3.5 w-3.5" />}
           {copied === key ? 'Copied · added to chat' : 'Copy & send'}
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Grammarly-style feedback on a message he has not sent yet. Lives under the
+ * text box, never in the chat thread.
+ */
+function DraftFeedback({
+  checking,
+  partialRead,
+  result,
+  error,
+  votes,
+  onVote,
+  onUse,
+  onDismiss,
+}: {
+  checking: boolean;
+  partialRead?: string;
+  result: Result | null;
+  error: string | null;
+  votes: Record<string, 'up' | 'down'>;
+  onVote: (result: Result, index: number, v: 'up' | 'down') => void;
+  onUse: (text: string) => void;
+  onDismiss: () => void;
+}) {
+  const [better, ...others] = result?.replies ?? [];
+  return (
+    <div className="lp-pop mt-2 max-h-64 overflow-y-auto rounded-xl border border-beige-300 bg-white p-3 shadow-sm">
+      <div className="flex items-center justify-between">
+        <span className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-coral">
+          <Sparkles className="h-3 w-3" />
+          Holla · on your message
+        </span>
+        <button onClick={onDismiss} aria-label="Dismiss feedback" className="rounded p-1 text-mutedtext hover:bg-beige-100 hover:text-charcoal">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {error && <p className="mt-2 text-sm text-charcoal">{error}</p>}
+
+      {checking && !result && (
+        <div className="mt-2">
+          {partialRead ? (
+            <p className="text-sm leading-relaxed text-charcoal">{partialRead}</p>
+          ) : (
+            <div className="flex gap-1 py-1" aria-label="Checking your message">
+              <span className="lp-dot h-1.5 w-1.5 rounded-full bg-mutedtext" />
+              <span className="lp-dot h-1.5 w-1.5 rounded-full bg-mutedtext" />
+              <span className="lp-dot h-1.5 w-1.5 rounded-full bg-mutedtext" />
+            </div>
+          )}
+        </div>
+      )}
+
+      {result && (
+        <div className="mt-2 space-y-3">
+          {result.read && <p className="text-sm leading-relaxed text-charcoal">{result.read}</p>}
+
+          {better && (
+            <div className="rounded-lg bg-beige-50 p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">
+                  Better version · {STYLE_LABEL[better.style] ?? better.style}
+                </span>
+                <FeedbackThumbs result={result} index={0} votes={votes} onVote={onVote} />
+              </div>
+              <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-charcoal">{better.text}</p>
+              <button
+                onClick={() => onUse(better.text)}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-coral px-3 py-1.5 text-xs font-semibold text-cream transition-colors hover:bg-coral-dark"
+              >
+                <Check className="h-3.5 w-3.5" />
+                Use this version
+              </button>
+            </div>
+          )}
+
+          {others.length > 0 && (
+            <details>
+              <summary className="cursor-pointer select-none font-mono text-[10px] uppercase tracking-wider text-mutedtext hover:text-coral">
+                {others.length} other {others.length === 1 ? 'angle' : 'angles'}
+              </summary>
+              <div className="mt-2 space-y-2">
+                {others.map((r, i) => (
+                  <div key={i} className="rounded-lg border border-beige-200 p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">{STYLE_LABEL[r.style] ?? r.style}</span>
+                      <FeedbackThumbs result={result} index={i + 1} votes={votes} onVote={onVote} />
+                    </div>
+                    <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-charcoal">{r.text}</p>
+                    <button
+                      onClick={() => onUse(r.text)}
+                      className="mt-2 rounded-lg border border-beige-300 px-2.5 py-1 text-xs font-medium text-charcoal hover:border-coral"
+                    >
+                      Use this
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FeedbackThumbs({
+  result,
+  index,
+  votes,
+  onVote,
+}: {
+  result: Result;
+  index: number;
+  votes: Record<string, 'up' | 'down'>;
+  onVote: (result: Result, index: number, v: 'up' | 'down') => void;
+}) {
+  const myVote = votes[`${result.requestId ?? 'x'}-${index}`];
+  return (
+    <div className="flex items-center gap-0.5">
+      <button
+        onClick={() => onVote(result, index, 'up')}
+        aria-label="Good suggestion"
+        aria-pressed={myVote === 'up'}
+        className={cn('rounded p-1 hover:bg-beige-100', myVote === 'up' ? 'text-sage' : 'text-mutedtext')}
+      >
+        <ThumbsUp className="h-3.5 w-3.5" />
+      </button>
+      <button
+        onClick={() => onVote(result, index, 'down')}
+        aria-label="Bad suggestion"
+        aria-pressed={myVote === 'down'}
+        className={cn('rounded p-1 hover:bg-beige-100', myVote === 'down' ? 'text-coral' : 'text-mutedtext')}
+      >
+        <ThumbsDown className="h-3.5 w-3.5" />
+      </button>
     </div>
   );
 }

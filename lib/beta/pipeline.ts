@@ -7,6 +7,57 @@ const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY })
 const MODEL = process.env.BETA_MODEL ?? "gemini-3.5-flash-lite";
 
 // ─────────────────────────────────────────────────────────
+// Slow-call protection
+// ─────────────────────────────────────────────────────────
+// Gemini sometimes leaves a single request hanging for 15-30 s while the next
+// identical one returns in 2 s. If a call has not answered after HEDGE_AFTER_MS
+// we start a second copy and use whichever answers first. Normal calls never
+// trigger it, so it costs no extra quota unless something is stuck.
+const HEDGE_AFTER_MS = Number(process.env.BETA_HEDGE_AFTER_MS ?? 6000);
+
+function hedged<T>(label: string, make: () => Promise<T>, afterMs = HEDGE_AFTER_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let launched = 0;
+    let failed = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const launch = () => {
+      launched++;
+      make().then(
+        (v) => {
+          if (settled) return;
+          settled = true;
+          if (timer) clearTimeout(timer);
+          resolve(v);
+        },
+        (err) => {
+          failed++;
+          if (settled) return;
+          if (launched < 2) {
+            // First attempt failed outright: retry once straight away.
+            if (timer) clearTimeout(timer);
+            console.warn(`[beta] ${label} failed, retrying once:`, String(err?.message ?? err).slice(0, 120));
+            launch();
+          } else if (failed >= launched) {
+            settled = true;
+            reject(err);
+          }
+        },
+      );
+    };
+
+    launch();
+    timer = setTimeout(() => {
+      if (!settled && launched < 2) {
+        console.warn(`[beta] ${label} still waiting after ${afterMs} ms, starting a second attempt`);
+        launch();
+      }
+    }, afterMs);
+  });
+}
+
+// ─────────────────────────────────────────────────────────
 // Types (match Part 4 of the beta brief)
 // ─────────────────────────────────────────────────────────
 export type Mode = "opener" | "reply" | "follow_up" | "fix_my_text";
@@ -395,7 +446,7 @@ export async function runBetaPipeline(input: BetaInput, hooks: PipelineHooks = {
   }
 
   const t0 = Date.now();
-  const understandRes = await ai.models.generateContent({
+  const understandRes = await hedged("understand", () => ai.models.generateContent({
     model: MODEL,
     contents: [{ role: "user", parts }],
     config: {
@@ -404,9 +455,13 @@ export async function runBetaPipeline(input: BetaInput, hooks: PipelineHooks = {
       responseSchema: UNDERSTAND_SCHEMA,
       temperature: 0.2,
     },
-  });
+  }));
   const u = safeJson<Understanding>(understandRes.text, "understanding");
   const understandMs = Date.now() - t0;
+  console.log(
+    "[beta] gemini understand",
+    JSON.stringify({ ms: understandMs, in: understandRes.usageMetadata?.promptTokenCount, out: understandRes.usageMetadata?.candidatesTokenCount }),
+  );
 
   // We know who wrote the typed text, so don't let the model re-guess it.
   const typed = input.text?.trim() ?? "";
@@ -497,29 +552,46 @@ export async function runBetaPipeline(input: BetaInput, hooks: PipelineHooks = {
     .join("\n\n");
 
   const tWrite = Date.now();
-  const writeStream = await ai.models.generateContentStream({
-    model: MODEL,
-    contents: [{ role: "user", parts: [{ text: writePrompt }] }],
-    config: {
-      systemInstruction: `${WRITE_SYSTEM}\n\nCOACHING MATERIAL (strategy only, never quote):\n${material}`,
-      responseMimeType: "application/json",
-      responseSchema: WRITE_SCHEMA,
-      temperature: 0.8,
-    },
-  });
+  // Start the stream and wait for its first chunk; hedged so a stuck request is replaced.
+  const startWrite = async () => {
+    const stream = await ai.models.generateContentStream({
+      model: MODEL,
+      contents: [{ role: "user", parts: [{ text: writePrompt }] }],
+      config: {
+        systemInstruction: `${WRITE_SYSTEM}\n\nCOACHING MATERIAL (strategy only, never quote):\n${material}`,
+        responseMimeType: "application/json",
+        responseSchema: WRITE_SCHEMA,
+        temperature: 0.8,
+      },
+    });
+    const it = stream[Symbol.asyncIterator]();
+    const first = await it.next();
+    return { it, first };
+  };
+  const { it: writeIt, first: firstChunk } = await hedged("write", startWrite);
+  const firstChunkMs = Date.now() - tWrite;
+
   let acc = "";
   let lastRead = "";
-  for await (const part of writeStream) {
-    acc += part.text ?? "";
+  let lastUsage: { promptTokenCount?: number; candidatesTokenCount?: number } | undefined;
+  const take = (chunk: { text?: string; usageMetadata?: typeof lastUsage }) => {
+    acc += chunk.text ?? "";
+    lastUsage = chunk.usageMetadata ?? lastUsage;
     const partial = extractPartialRead(acc);
     if (partial && partial !== lastRead) {
       lastRead = partial;
       hooks.onEvent?.({ type: "read", text: partial });
     }
-  }
+  };
+  if (!firstChunk.done) take(firstChunk.value);
+  for (let n = await writeIt.next(); !n.done; n = await writeIt.next()) take(n.value);
   const w = safeJson<{ read: string; replies: BetaResult["replies"]; next_move: string }>(acc, "reply");
 
   const writeMs = Date.now() - tWrite;
+  console.log(
+    "[beta] gemini write",
+    JSON.stringify({ ms: writeMs, first_chunk_ms: firstChunkMs, in: lastUsage?.promptTokenCount, out: lastUsage?.candidatesTokenCount }),
+  );
   const replies = normalizeReplies(w.replies);
   if (replies.length === 0) throw new Error("The model did not return any replies.");
 
