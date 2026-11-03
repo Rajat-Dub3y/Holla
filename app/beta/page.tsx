@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, Check, Copy, Paperclip, PencilLine, Plus, Send, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react';
+import { ArrowUp, Check, ChevronDown, Copy, Paperclip, PencilLine, Plus, Send, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { BRAND } from '@/lib/brand';
 import { cn } from '@/lib/utils';
 import { auth } from '@/lib/firebase-client';
@@ -565,11 +565,11 @@ export default function BetaPage() {
                 <p className="text-xs text-mutedtext">Reading your screenshot…</p>
               )}
               {partial?.read && (
-                <div className="rounded-lg border-l-2 border-coral bg-beige-50 px-3 py-2.5">
-                  <span className="font-mono text-[10px] uppercase tracking-wider text-coral">
+                <div className="ml-0 border-l-2 border-beige-300 pl-3 md:ml-6">
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">
                     {partial.mode === 'fix_my_text' ? 'On your draft' : partial.mode === 'opener' ? 'What to lead with' : "What she's saying"}
                   </span>
-                  <p className="mt-1 text-sm leading-relaxed text-charcoal">{partial.read}</p>
+                  <p className="mt-0.5 text-xs leading-relaxed text-mutedtext">{partial.read}</p>
                 </div>
               )}
               <div className="flex justify-start">
@@ -804,6 +804,9 @@ function ResultCard({
   onFocusBox: () => void;
   disabled: boolean;
 }) {
+  // The suggested replies stay folded so the chat is what you read. What her message means never is.
+  const [showReplies, setShowReplies] = useState(false);
+
   // One quick tap instead of guessing who is who.
   if (result.clarify) {
     return (
@@ -834,7 +837,7 @@ function ResultCard({
   const insightContext = { her_message: result.her_message, mode: result.mode, stage: result.stage };
 
   return (
-    <div className="lp-pop ml-0 space-y-2 rounded-xl border border-beige-200/80 bg-beige-50/40 p-2.5 md:ml-6">
+    <div className="lp-pop ml-0 space-y-1.5 border-l-2 border-beige-300 pl-3 md:ml-6">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">
           {isDraftFeedback ? 'Holla · on your draft' : 'Holla suggests'}
@@ -867,65 +870,80 @@ function ResultCard({
         </div>
       )}
 
-      {/* The suggestion */}
-      {recommended && (
-        <ReplyBlock
-          label={isDraftFeedback ? 'Better version' : 'Suggested reply'}
-          reply={recommended}
-          index={0}
-          highlight
-          result={result}
-          copied={copied}
-          votes={votes}
-          onCopy={onCopy}
-          onUse={live ? onUse : undefined}
-          onVote={onVote}
-        />
-      )}
-
-      {/* Why, with the "ask about this" button */}
+      {/* What her message means: always visible, with the "ask about this" button */}
       {result.read && (
         <InsightBlock kind="read" insight={result.read} context={insightContext} history={history}>
-          <div className="rounded-lg py-1.5 pl-1 pr-10">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">
+          <div className="py-0.5 pl-0 pr-10">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-coral">
               {isDraftFeedback ? 'What I changed' : result.mode === 'opener' ? 'What to lead with' : "What she's saying"}
             </span>
-            <p className="mt-0.5 text-xs leading-relaxed text-mutedtext">{result.read}</p>
+            <p className="mt-0.5 text-sm leading-relaxed text-charcoal">{result.read}</p>
           </div>
         </InsightBlock>
       )}
 
-      {/* More options, tucked away so the chat stays the focus */}
-      {alternatives.length > 0 && (
-        <details className="group">
-          <summary className="cursor-pointer select-none font-mono text-[10px] uppercase tracking-wider text-mutedtext hover:text-coral">
-            {alternatives.length} other {alternatives.length === 1 ? 'option' : 'options'}
-          </summary>
-          <div className="mt-2 space-y-2">
-            {alternatives.map((r, i) => (
-              <ReplyBlock
-                key={i}
-                reply={r}
-                index={i + 1}
-                result={result}
-                copied={copied}
-                votes={votes}
-                onCopy={onCopy}
-                onUse={live ? onUse : undefined}
-                onVote={onVote}
-              />
-            ))}
-          </div>
-        </details>
+      {/* Suggestions stay folded so the chat is what you read */}
+      {recommended && (
+        <button
+          type="button"
+          onClick={() => setShowReplies((v) => !v)}
+          aria-expanded={showReplies}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-colors',
+            showReplies
+              ? 'border-beige-300 bg-beige-100 text-charcoal hover:border-coral'
+              : 'border-coral/50 bg-white text-charcoal hover:border-coral hover:bg-coral/5'
+          )}
+        >
+          <Sparkles className="h-3.5 w-3.5 text-coral" />
+          {showReplies ? 'Hide suggestions' : `Show suggested ${result.replies.length === 1 ? 'reply' : 'replies'}`}
+          <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showReplies && 'rotate-180')} />
+        </button>
       )}
 
-      {result.next_move && !isDraftFeedback && (
-        <InsightBlock kind="next_move" insight={result.next_move} context={insightContext} history={history}>
-          <p className="py-1 pl-1 pr-10 text-xs text-mutedtext">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">Next move </span>
-            {result.next_move}
-          </p>
-        </InsightBlock>
+      {showReplies && recommended && (
+        <div className="space-y-2 pt-1">
+          <ReplyBlock
+            label={isDraftFeedback ? 'Better version' : 'Suggested reply'}
+            reply={recommended}
+            index={0}
+            highlight
+            result={result}
+            copied={copied}
+            votes={votes}
+            onCopy={onCopy}
+            onUse={live ? onUse : undefined}
+            onVote={onVote}
+          />
+
+          {alternatives.length > 0 && (
+            <div className="space-y-2">
+              <p className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">Or try</p>
+              {alternatives.map((r, i) => (
+                <ReplyBlock
+                  key={i}
+                  reply={r}
+                  index={i + 1}
+                  result={result}
+                  copied={copied}
+                  votes={votes}
+                  onCopy={onCopy}
+                  onUse={live ? onUse : undefined}
+                  onVote={onVote}
+                />
+              ))}
+            </div>
+          )}
+
+          {result.next_move && !isDraftFeedback && (
+            <InsightBlock kind="next_move" insight={result.next_move} context={insightContext} history={history}>
+              <p className="py-1 pr-10 text-xs text-mutedtext">
+                <span className="font-mono text-[10px] uppercase tracking-wider text-mutedtext">Next move </span>
+                {result.next_move}
+              </p>
+            </InsightBlock>
+          )}
+        </div>
       )}
 
       {/* Team-only debug (needs ?debug=KEY on the URL and a matching BETA_DEBUG_KEY) */}
@@ -976,7 +994,7 @@ function ReplyBlock({
     <div
       className={cn(
         'rounded-lg border p-2.5',
-        highlight ? 'border-beige-300 bg-white/80' : 'border-beige-200/80 bg-white/60'
+        highlight ? 'border-transparent bg-transparent !p-0' : 'border-beige-200/80 bg-white/60'
       )}
     >
       <div className="flex items-center justify-between gap-2">
